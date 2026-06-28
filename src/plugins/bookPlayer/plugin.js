@@ -20,6 +20,8 @@ import { renderComponent } from '../../utils/reactUtils';
 import 'material-design-icons-iconfont';
 import '../../elements/emby-button/paper-icon-button-light';
 
+import TtsReader from './ttsReader';
+
 import html from './template.html';
 import './style.scss';
 
@@ -54,7 +56,21 @@ export class BookPlayer {
         this.onWindowKeyDown = this.onWindowKeyDown.bind(this);
         this.addSwipeGestures = this.addSwipeGestures.bind(this);
         this.toggleFullscreen = this.toggleFullscreen.bind(this);
+        this.startReadingHere = this.startReadingHere.bind(this);
+        this.resumeFromSaved = this.resumeFromSaved.bind(this);
+        this.stopReading = this.stopReading.bind(this);
+        this.pauseReading = this.pauseReading.bind(this);
+        this.resumeReading = this.resumeReading.bind(this);
+        this.jumpBack = this.jumpBack.bind(this);
+        this.jumpForward = this.jumpForward.bind(this);
         this.fullscreen = false;
+        this.ttsReader = null;
+        this._ttsResumeIndex = null;
+        this._ttsResumePct = null;
+        this._ttsResumeHref = null;
+        this._notifyTtsStopped = null;
+        this._notifyPageUpdate = null;
+        this._layoutObserver = null;
     }
 
     play(options) {
@@ -94,6 +110,19 @@ export class BookPlayer {
         if (rendition) {
             rendition.destroy();
         }
+
+        if (this.ttsReader) {
+            this.ttsReader.stop();
+            this.ttsReader = null;
+        }
+
+        this._ttsResumeIndex = null;
+        this._ttsResumePct = null;
+        this._ttsResumeHref = null;
+        this._notifyTtsStopped = null;
+        this._notifyPageUpdate = null;
+        this._layoutObserver?.disconnect();
+        this._layoutObserver = null;
 
         if (this.fullscreen) {
             this.toggleFullscreen();
@@ -260,18 +289,107 @@ export class BookPlayer {
         }
     }
 
-    previous(e) {
+    async previous(e) {
         e?.preventDefault();
+        const wasReading = !!this.ttsReader;
+        if (wasReading) {
+            this.ttsReader.stop();
+            this.ttsReader = null;
+        }
         if (this.rendition) {
-            this.rendition.book.package.metadata.direction === 'rtl' ? this.rendition.next() : this.rendition.prev();
+            const nav = this.rendition.book.package.metadata.direction === 'rtl' ?
+                this.rendition.next() :
+                this.rendition.prev();
+            if (wasReading) await nav;
+        }
+        if (wasReading) {
+            this.ttsReader = new TtsReader(this.rendition);
+            this.ttsReader.start(0);
         }
     }
 
-    next(e) {
+    async next(e) {
         e?.preventDefault();
-        if (this.rendition) {
-            this.rendition.book.package.metadata.direction === 'rtl' ? this.rendition.prev() : this.rendition.next();
+        const wasReading = !!this.ttsReader;
+        if (wasReading) {
+            this.ttsReader.stop();
+            this.ttsReader = null;
         }
+        if (this.rendition) {
+            const nav = this.rendition.book.package.metadata.direction === 'rtl' ?
+                this.rendition.prev() :
+                this.rendition.next();
+            if (wasReading) await nav;
+        }
+        if (wasReading) {
+            this.ttsReader = new TtsReader(this.rendition);
+            this.ttsReader.start(0);
+        }
+    }
+
+    startReadingHere() {
+        if (!this.loaded || !this.rendition) return;
+        this._ttsResumeIndex = null;
+        this._ttsResumePct = null;
+        this._ttsResumeHref = null;
+        this.ttsReader = new TtsReader(this.rendition);
+        this.ttsReader.start(0);
+    }
+
+    async resumeFromSaved() {
+        if (!this.loaded || !this.rendition) return;
+        const savedIndex = this._ttsResumeIndex ?? 0;
+        const savedPct = this._ttsResumePct;
+        this._ttsResumeIndex = null;
+        this._ttsResumePct = null;
+        this._ttsResumeHref = null;
+
+        if (savedPct != null) {
+            const cfi = this.rendition.book.locations.cfiFromPercentage(savedPct);
+            await this.rendition.display(cfi);
+        }
+
+        this.ttsReader = new TtsReader(this.rendition);
+        this.ttsReader.start(savedIndex);
+    }
+
+    stopReading() {
+        if (this.ttsReader) {
+            this._ttsResumeIndex = this.ttsReader.currentIndex;
+            const loc = this.rendition?.currentLocation()?.start;
+            this._ttsResumeHref = loc?.href ?? null;
+            this._ttsResumePct = loc?.cfi ?
+                (this.rendition.book.locations.percentageFromCfi(loc.cfi) ?? null) :
+                null;
+            this.ttsReader.stop();
+            this.ttsReader = null;
+            this._notifyTtsStopped?.();
+        }
+    }
+
+    pauseReading() {
+        if (!this.ttsReader) return;
+        this._ttsResumeIndex = this.ttsReader.currentIndex;
+        const loc = this.rendition?.currentLocation()?.start;
+        this._ttsResumeHref = loc?.href ?? null;
+        this._ttsResumePct = loc?.cfi ?
+            (this.rendition.book.locations.percentageFromCfi(loc.cfi) ?? null) :
+            null;
+        this.ttsReader.stop();
+        this.ttsReader = null;
+        this._notifyTtsStopped?.();
+    }
+
+    resumeReading() {
+        this.ttsReader?.resume();
+    }
+
+    jumpBack() {
+        this.ttsReader?.jumpBack(1);
+    }
+
+    jumpForward() {
+        this.ttsReader?.jumpForward(1);
     }
 
     createMediaElement(options) {
@@ -307,7 +425,16 @@ export class BookPlayer {
             onRotateTheme: this.rotateTheme,
             onDecreaseFontSize: this.decreaseFontSize,
             onIncreaseFontSize: this.increaseFontSize,
-            onToggleFullscreen: Screenfull.isEnabled || window.NativeShell ? this.toggleFullscreen : null
+            onToggleFullscreen: Screenfull.isEnabled || window.NativeShell ? this.toggleFullscreen : null,
+            onRegisterStopHandler: (fn) => { this._notifyTtsStopped = fn; },
+            onRegisterPageUpdateHandler: (fn) => { this._notifyPageUpdate = fn; },
+            onStartReadingHere: this.startReadingHere,
+            onResumeFromSaved: this.resumeFromSaved,
+            onStopReading: this.stopReading,
+            onPauseReading: this.pauseReading,
+            onResumeReading: this.resumeReading,
+            onJumpBack: this.jumpBack,
+            onJumpForward: this.jumpForward
         }, elem.querySelector('#bookOsdMount'));
 
         return elem;
@@ -350,8 +477,33 @@ export class BookPlayer {
 
                     this.bindEvents();
 
-                    return this.rendition.book.locations.generate(1024).then(async () => {
+                    return this.rendition.book.locations.generate(1024).then(async (cfiList) => {
                         if (this.cancellationToken) reject();
+
+                        const totalPages = cfiList.length;
+
+                        // Size the epub container to fit between the OSD bars BEFORE restoring the
+                        // saved position. rendition.resize() re-displays at the rendition's last
+                        // reported location (epub.js onResized), and that location only settles a
+                        // queued tick after display() resolves — so if the resize runs right after
+                        // the resume display(), it re-displays the stale start-of-book location and
+                        // the book jumps to the beginning. Doing the sizing first makes the resume
+                        // display() the last navigation in the queue, so it wins.
+                        this._updateEpubLayout = () => {
+                            const container = document.querySelector('#bookPlayerContainer');
+                            const topBar = document.querySelector('.bookOsdTop');
+                            const bottomGrp = document.querySelector('.bookOsdBottomGroup');
+                            if (!container || !topBar || !bottomGrp) return;
+                            const topH = topBar.getBoundingClientRect().height;
+                            const bottomH = bottomGrp.getBoundingClientRect().height;
+                            container.style.top = `${topH}px`;
+                            container.style.height = `calc(100% - ${topH + bottomH}px)`;
+                            this.rendition?.resize('100%', container.clientHeight);
+                        };
+                        this._layoutObserver = new ResizeObserver(this._updateEpubLayout);
+                        this._layoutObserver.observe(document.querySelector('.bookOsdTop'));
+                        this._layoutObserver.observe(document.querySelector('.bookOsdBottomGroup'));
+                        this._updateEpubLayout();
 
                         const percentageTicks = options.startPositionTicks / 10000000;
                         if (percentageTicks !== 0.0) {
@@ -364,7 +516,11 @@ export class BookPlayer {
                         rendition.on('relocated', (locations) => {
                             this.progress = book.locations.percentageFromCfi(locations.start.cfi);
                             Events.trigger(this, 'pause');
+                            this._notifyPageUpdate?.(locations.start.location + 1, totalPages);
                         });
+
+                        const startLoc = this.rendition.currentLocation()?.start;
+                        this._notifyPageUpdate?.((startLoc?.location ?? 0) + 1, totalPages);
 
                         loading.hide();
                         return resolve();

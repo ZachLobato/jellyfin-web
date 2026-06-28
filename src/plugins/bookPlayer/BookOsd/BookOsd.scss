@@ -7,6 +7,26 @@
     flex-direction: column;
 }
 
+.bookOsdBottomGroup {
+    display: flex;
+    flex-direction: column;
+}
+
+.bookOsdTtsControls {
+    @keyframes tts-fadein {
+        from { opacity: 0; transform: translateY(4px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    animation: tts-fadein 0.2s ease;
+}
+
+.bookOsdRow.bookOsdTtsControls {
+    justify-content: center;
+    gap: 0.5rem;
+    background: transparent;
+}
+
 .bookOsdRow {
     display: flex;
     justify-content: flex-start;
@@ -14,6 +34,16 @@
     height: 5vh;
     padding: 0 0.8vw;
     background-color: var(--jf-palette-AppBar-defaultBg);
+}
+
+.bookOsd {
+    .emby-button,
+    .bookOsdTitle {
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.95),
+            0 1px 4px rgba(0, 0, 0, 0.8),
+            0 0 8px rgba(0, 0, 0, 0.5);
+    }
 }
 
 // TODO disable landscape on mobile devices
@@ -31,8 +61,21 @@
     padding-bottom: env(safe-area-inset-bottom);
 }
 
+.bookOsdRow.bookOsdBottom {
+    justify-content: center;
+    gap: 0.5rem;
+}
+
 .bookOsdMargin {
     margin-left: auto;
+}
+
+.bookOsdPage {
+    font-size: 0.8rem;
+    opacity: 0.6;
+    margin-left: 0.5rem;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .bookOsdTitle {

@@ -23,6 +23,7 @@ interface BookOsdProps {
     onJumpForward?: () => void;
     onRegisterStopHandler?: (handler: () => void) => void;
     onRegisterPageUpdateHandler?: (handler: (current: number, total: number) => void) => void;
+    onToggleWakeLock?: () => void;
 }
 
 const BookOsd: FC<BookOsdProps> = ({
@@ -43,9 +44,11 @@ const BookOsd: FC<BookOsdProps> = ({
     onJumpBack,
     onJumpForward,
     onRegisterStopHandler,
-    onRegisterPageUpdateHandler
+    onRegisterPageUpdateHandler,
+    onToggleWakeLock
 }) => {
     const [fullscreen, setFullscreen] = useState(false);
+    const [wakeLockActive, setWakeLockActive] = useState(false);
     const [controlsShown, setControlsShown] = useState(false);
     const [reading, setReading] = useState(false);
     const [paused, setPaused] = useState(false);
@@ -56,6 +59,11 @@ const BookOsd: FC<BookOsdProps> = ({
         onToggleFullscreen?.();
         setFullscreen(state => !state);
     }, [onToggleFullscreen]);
+
+    const onClickWakeLock = useCallback(() => {
+        onToggleWakeLock?.();
+        setWakeLockActive(state => !state);
+    }, [onToggleWakeLock]);
 
     const onClickRead = useCallback(() => {
         if (reading) {
@@ -114,9 +122,18 @@ const BookOsd: FC<BookOsdProps> = ({
             <div className='bookOsdRow bookOsdTop'>
                 <IconButton onClick={onExit} icon='arrow_back' title={globalize.translate('ButtonBack')} />
                 <span className='bookOsdTitle'>{title}</span>
-                {totalPages > 0 && (
-                    <span className='bookOsdPage'>{currentPage} / {totalPages}</span>
-                )}
+                <div className='bookOsdTopRight'>
+                    {totalPages > 0 && (
+                        <span className='bookOsdPage'>{currentPage} / {totalPages}</span>
+                    )}
+                    {onToggleWakeLock && (
+                        <IconButton
+                            onClick={onClickWakeLock}
+                            icon={wakeLockActive ? 'bedtime_off' : 'bedtime'}
+                            title={globalize.translate(wakeLockActive ? 'ButtonKeepScreenOn' : 'ButtonKeepScreenOff')}
+                        />
+                    )}
+                </div>
             </div>
 
             <div className='bookOsdBottomGroup'>

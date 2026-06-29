@@ -117,6 +117,8 @@
     "ButtonFullscreen": "Fullscreen",
     "ButtonGotIt": "Got It",
     "ButtonInfo": "Info",
+    "ButtonKeepScreenOff": "Allow screen timeout",
+    "ButtonKeepScreenOn": "Keep screen on",
     "ButtonLearnMore": "Learn More",
     "ButtonLibraryAccess": "Library access",
     "ButtonManualLogin": "Manual Login",

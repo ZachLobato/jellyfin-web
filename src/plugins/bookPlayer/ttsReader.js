@@ -1,9 +1,45 @@
 const TTS_WS_URL = `ws://${window.location.hostname}:7878`;
 
 const SENTENCE_RE = /[^.!?]+[.!?]["""'''"]?\s*|[^.!?]+$/g;
+const NUMERIC_DATE_RE = /\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/g;
+const SECTION_BREAK_RE = /(^|\s)(?:(?:\*\s*){3,}|(?:[-–—]\s*){3,})(?=\s|$)/g;
+const DATE_RANGE_SEPARATOR_RE = /(\b\d{1,2}\/\d{1,2}\/\d{2,4})\s*[|–—-]\s*(\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
+const LEADING_DATE_MARKER_RE = /(^|\s)\*\s+(?=\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
+const DATE_SPEECH_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
+const MONTH_NAMES = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December'
+];
 
 function splitSentences(text) {
     return (text.match(SENTENCE_RE) || []).map(s => s.trim()).filter(Boolean);
+}
+
+export function prepareTextForSentenceSplit(text) {
+    return text.replace(NUMERIC_DATE_RE, '$1/$2/$3');
+}
+
+export function normalizeSpeechText(text) {
+    return text
+        .replace(SECTION_BREAK_RE, '$1... ...Next Chapter Section... ...')
+        .replace(LEADING_DATE_MARKER_RE, '$1')
+        .replace(DATE_RANGE_SEPARATOR_RE, '$1 to $2. ')
+        .replace(DATE_SPEECH_RE, (_match, day, month, year) => {
+            const monthName = MONTH_NAMES[Number(month) - 1];
+            return monthName ? `${monthName} ${Number(day)}, ${year}` : `${day}/${month}/${year}`;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 class BrowserAudioQueue {
@@ -278,17 +314,11 @@ class TtsReader {
     _sendCurrentPage() {
         const sentences = this._extractPageSentences();
 
-        // Discard carry-over — start at the first complete sentence on the current page
+        // Start from the text visible on the current page. Page breaks in ebooks
+        // often split a sentence or end a line with punctuation other than .!?;
+        // keeping those fragments prevents TTS from skipping visible page text.
         this._carryOverText = '';
         this._carryOverNodes = [];
-
-        // Drop trailing incomplete sentence (continues onto next page)
-        if (sentences.length > 0) {
-            const last = sentences[sentences.length - 1];
-            if (!/[.!?]$/.test(last.text.trim())) {
-                sentences.pop();
-            }
-        }
 
         this.allSentences = sentences;
 
@@ -410,13 +440,13 @@ class TtsReader {
             nodeRanges.push({ node, start, end: fullText.length, chunkLength: chunk.length, leadingWhiteSpace });
         }
 
-        fullText = fullText.trim();
+        fullText = prepareTextForSentenceSplit(fullText.trim());
 
         const rawSentences = [];
         let match;
         const re = new RegExp(SENTENCE_RE.source, 'g');
         while ((match = re.exec(fullText)) !== null) {
-            const text = match[0].trim();
+            const text = normalizeSpeechText(match[0]);
             if (!text) continue;
             const sentStart = match.index;
             const sentEnd = sentStart + match[0].length;

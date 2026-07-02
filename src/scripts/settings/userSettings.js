@@ -58,6 +58,7 @@ const defaultComicsPlayerSettings = {
 };
 
 const defaultPdfPlayerSettings = {
+    invertColors: false,
     pagesPerView: 1
 };
 

@@ -6,6 +6,10 @@
     z-index: 100;
     background: #fff;
 
+    &.pdfPlayerInvertColors {
+        background: #000;
+    }
+
     .pdfPageContainer {
         align-items: center;
         display: flex;
@@ -21,6 +25,10 @@
         width: auto;
     }
 
+    &.pdfPlayerInvertColors .pdfPageContainer canvas {
+        filter: invert(1) hue-rotate(180deg);
+    }
+
     .actionButtons {
         right: 0.5vh;
         top: 0.5vh;
@@ -31,5 +39,9 @@
     .actionButtonIcon {
         color: #000;
         opacity: 0.7;
+    }
+
+    .btnToggleColorInversion.active .actionButtonIcon {
+        opacity: 1;
     }
 }

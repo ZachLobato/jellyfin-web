@@ -24,6 +24,7 @@ export class PdfPlayer {
         this.onDialogClosed = this.onDialogClosed.bind(this);
         this.onWindowKeyDown = this.onWindowKeyDown.bind(this);
         this.onTouchStart = this.onTouchStart.bind(this);
+        this.onColorInversionChanged = this.onColorInversionChanged.bind(this);
         this.onViewChanged = this.onViewChanged.bind(this);
     }
 
@@ -153,6 +154,22 @@ export class PdfPlayer {
         this.changeView(view);
     }
 
+    onColorInversionChanged() {
+        this.pdfPlayerSettings.invertColors = !this.pdfPlayerSettings.invertColors;
+        this.updateColorInversion();
+    }
+
+    updateColorInversion() {
+        const enabled = this.pdfPlayerSettings.invertColors;
+
+        this.mediaElement.classList.toggle('pdfPlayerInvertColors', enabled);
+
+        const button = this.mediaElement.querySelector('.btnToggleColorInversion');
+        button.title = enabled ? 'Disable Color Inversion' : 'Invert Colors';
+        button.classList.toggle('active', enabled);
+        button.setAttribute('aria-pressed', enabled.toString());
+    }
+
     changeView(view) {
         const prevIcon = view === 1 ? 'devices_fold' : 'import_contacts';
         this.mediaElement.querySelector('.btnToggleView > span').classList.remove(prevIcon);
@@ -172,6 +189,7 @@ export class PdfPlayer {
 
         elem.addEventListener('close', this.onDialogClosed, { once: true });
         elem.querySelector('.btnExit').addEventListener('click', this.onDialogClosed, { once: true });
+        elem.querySelector('.btnToggleColorInversion').addEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
     }
 
@@ -187,6 +205,7 @@ export class PdfPlayer {
 
         elem.removeEventListener('close', this.onDialogClosed);
         elem.querySelector('.btnExit').removeEventListener('click', this.onDialogClosed);
+        elem.querySelector('.btnToggleColorInversion').removeEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
     }
 
@@ -221,6 +240,7 @@ export class PdfPlayer {
             let html = '';
             html += '<div class="pdfPageContainer"></div>';
             html += '<div class="actionButtons">';
+            html += '<button is="paper-icon-button-light" class="autoSize btnToggleColorInversion" tabindex="-1"><span class="material-icons actionButtonIcon invert_colors" aria-hidden="true"></span></button>';
             html += `<button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1"><span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span></button>`;
             html += '<button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1"><span class="material-icons actionButtonIcon close" aria-hidden="true"></span></button>';
             html += '</div>';
@@ -235,6 +255,7 @@ export class PdfPlayer {
 
         const viewTitle = this.pdfPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+        this.updateColorInversion();
 
         return elem;
     }

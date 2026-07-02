@@ -57,6 +57,10 @@ const defaultComicsPlayerSettings = {
     pagesPerView: 1
 };
 
+const defaultPdfPlayerSettings = {
+    pagesPerView: 1
+};
+
 export class UserSettings {
     /**
      * Bind UserSettings instance to user.
@@ -684,6 +688,27 @@ export class UserSettings {
     }
 
     /**
+     * Get PDF player settings.
+     * @param {string} mediaSourceId - Media Source Id.
+     * @return {Object} PDF player settings.
+     */
+    getPdfPlayerSettings(mediaSourceId) {
+        const settings = JSON.parse(this.get('pdfPlayerSettings', false) || '{}');
+        return Object.assign({}, defaultPdfPlayerSettings, settings[mediaSourceId]);
+    }
+
+    /**
+     * Set PDF player settings.
+     * @param {Object} value - PDF player settings.
+     * @param {string} mediaSourceId - Media Source Id.
+     */
+    setPdfPlayerSettings(value, mediaSourceId) {
+        const settings = JSON.parse(this.get('pdfPlayerSettings', false) || '{}');
+        settings[mediaSourceId] = value;
+        return this.set('pdfPlayerSettings', JSON.stringify(settings), false);
+    }
+
+    /**
      * Set filter.
      * @param {string} key - Filter key.
      * @param {string} value - Filter value.
@@ -760,6 +785,8 @@ export const getSubtitleAppearanceSettings = currentSettings.getSubtitleAppearan
 export const setSubtitleAppearanceSettings = currentSettings.setSubtitleAppearanceSettings.bind(currentSettings);
 export const getComicsPlayerSettings = currentSettings.getComicsPlayerSettings.bind(currentSettings);
 export const setComicsPlayerSettings = currentSettings.setComicsPlayerSettings.bind(currentSettings);
+export const getPdfPlayerSettings = currentSettings.getPdfPlayerSettings.bind(currentSettings);
+export const setPdfPlayerSettings = currentSettings.setPdfPlayerSettings.bind(currentSettings);
 export const setFilter = currentSettings.setFilter.bind(currentSettings);
 export const getFilter = currentSettings.getFilter.bind(currentSettings);
 export const customCss = currentSettings.customCss.bind(currentSettings);

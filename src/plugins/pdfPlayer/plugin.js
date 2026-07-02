@@ -9,6 +9,7 @@ import dom from '../../utils/dom';
 import { appRouter } from '../../components/router/appRouter';
 import { ServerConnections } from 'lib/jellyfin-apiclient';
 import Events from '../../utils/events.ts';
+import * as userSettings from '../../scripts/settings/userSettings';
 
 import './style.scss';
 import '../../elements/emby-button/paper-icon-button-light';
@@ -23,6 +24,7 @@ export class PdfPlayer {
         this.onDialogClosed = this.onDialogClosed.bind(this);
         this.onWindowKeyDown = this.onWindowKeyDown.bind(this);
         this.onTouchStart = this.onTouchStart.bind(this);
+        this.onViewChanged = this.onViewChanged.bind(this);
     }
 
     play(options) {
@@ -30,6 +32,9 @@ export class PdfPlayer {
         this.loaded = false;
         this.cancellationToken = false;
         this.pages = {};
+
+        const mediaSourceId = options.items[0].Id;
+        this.pdfPlayerSettings = userSettings.getPdfPlayerSettings(mediaSourceId);
 
         loading.show();
 
@@ -45,6 +50,9 @@ export class PdfPlayer {
         };
 
         Events.trigger(this, 'stopped', [stopInfo]);
+
+        const mediaSourceId = this.item.Id;
+        userSettings.setPdfPlayerSettings(this.pdfPlayerSettings, mediaSourceId);
 
         const elem = this.mediaElement;
         if (elem) {
@@ -132,11 +140,39 @@ export class PdfPlayer {
         this.stop();
     }
 
+    onViewChanged() {
+        let view = this.pdfPlayerSettings.pagesPerView;
+
+        if (!view || view === 1) {
+            view = 2;
+        } else {
+            view = 1;
+        }
+
+        this.pdfPlayerSettings.pagesPerView = view;
+        this.changeView(view);
+    }
+
+    changeView(view) {
+        const prevIcon = view === 1 ? 'devices_fold' : 'import_contacts';
+        this.mediaElement.querySelector('.btnToggleView > span').classList.remove(prevIcon);
+
+        const newIcon = view === 1 ? 'import_contacts' : 'devices_fold';
+        this.mediaElement.querySelector('.btnToggleView > span').classList.add(newIcon);
+
+        const viewTitle = view === 1 ? 'Double Page View' : 'Single Page View';
+        this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+
+        this.pages = {};
+        this.loadPage(this.progress + 1);
+    }
+
     bindMediaElementEvents() {
         const elem = this.mediaElement;
 
         elem.addEventListener('close', this.onDialogClosed, { once: true });
         elem.querySelector('.btnExit').addEventListener('click', this.onDialogClosed, { once: true });
+        elem.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
     }
 
     bindEvents() {
@@ -151,6 +187,7 @@ export class PdfPlayer {
 
         elem.removeEventListener('close', this.onDialogClosed);
         elem.querySelector('.btnExit').removeEventListener('click', this.onDialogClosed);
+        elem.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
     }
 
     unbindEvents() {
@@ -179,9 +216,12 @@ export class PdfPlayer {
                 removeOnClose: true
             });
 
+            const viewIcon = this.pdfPlayerSettings.pagesPerView === 1 ? 'import_contacts' : 'devices_fold';
+
             let html = '';
-            html += '<canvas id="canvas"></canvas>';
+            html += '<div class="pdfPageContainer"></div>';
             html += '<div class="actionButtons">';
+            html += `<button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1"><span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span></button>`;
             html += '<button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1"><span class="material-icons actionButtonIcon close" aria-hidden="true"></span></button>';
             html += '</div>';
 
@@ -192,6 +232,10 @@ export class PdfPlayer {
         }
 
         this.mediaElement = elem;
+
+        const viewTitle = this.pdfPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
+        this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+
         return elem;
     }
 
@@ -243,37 +287,46 @@ export class PdfPlayer {
     }
 
     next() {
-        if (this.progress === this.duration() - 1) return;
-        this.loadPage(this.progress + 2);
-        this.progress = this.progress + 1;
+        if (this.progress >= this.duration() - 1) return;
+
+        const nextProgress = Math.min(this.progress + this.pdfPlayerSettings.pagesPerView, this.duration() - 1);
+        this.loadPage(nextProgress + 1);
+        this.progress = nextProgress;
 
         Events.trigger(this, 'pause');
     }
 
     previous() {
         if (this.progress === 0) return;
-        this.loadPage(this.progress);
-        this.progress = this.progress - 1;
+
+        const previousProgress = Math.max(this.progress - this.pdfPlayerSettings.pagesPerView, 0);
+        this.loadPage(previousProgress + 1);
+        this.progress = previousProgress;
 
         Events.trigger(this, 'pause');
     }
 
-    replaceCanvas(canvas) {
-        const old = document.getElementById('canvas');
+    replacePages(pageNumbers) {
+        const container = this.mediaElement.querySelector('.pdfPageContainer');
+        container.innerHTML = '';
 
-        canvas.id = 'canvas';
-        old.parentNode.replaceChild(canvas, old);
+        for (const pageNumber of pageNumbers) {
+            container.appendChild(this.pages[`page${pageNumber}`]);
+        }
     }
 
     loadPage(number) {
         const prefix = 'page';
         const pad = 2;
+        const visiblePages = this.getVisiblePageNumbers(number);
 
         // generate list of cached pages by padding the requested page on both sides
-        const pages = [prefix + number];
+        const pages = visiblePages.map(pageNumber => prefix + pageNumber);
         for (let i = 1; i <= pad; i++) {
             if (number - i > 0) pages.push(prefix + (number - i));
-            if (number + i < this.duration()) pages.push(prefix + (number + i));
+            if (number + this.pdfPlayerSettings.pagesPerView - 1 + i <= this.duration()) {
+                pages.push(prefix + (number + this.pdfPlayerSettings.pagesPerView - 1 + i));
+            }
         }
 
         // load any missing pages in the cache
@@ -284,8 +337,8 @@ export class PdfPlayer {
             }
         }
 
-        // show the requested page
-        this.replaceCanvas(this.pages[prefix + number], number);
+        // show the requested page or pages
+        this.replacePages(visiblePages);
 
         // delete all pages outside the cache area
         for (const page in this.pages) {
@@ -295,23 +348,33 @@ export class PdfPlayer {
         }
     }
 
+    getVisiblePageNumbers(number) {
+        const pages = [];
+        const pagesPerView = this.pdfPlayerSettings.pagesPerView;
+
+        for (let i = 0; i < pagesPerView; i++) {
+            const pageNumber = number + i;
+            if (pageNumber <= this.duration()) {
+                pages.push(pageNumber);
+            }
+        }
+
+        return pages;
+    }
+
     renderPage(canvas, number) {
         const devicePixelRatio = window.devicePixelRatio || 1;
         this.book.getPage(number).then(page => {
             const original = page.getViewport({ scale: 1 });
-            const scale = Math.min((window.innerHeight / original.height), (window.innerWidth / original.width)) * devicePixelRatio;
+            const pageWidth = window.innerWidth / this.pdfPlayerSettings.pagesPerView;
+            const scale = Math.min((window.innerHeight / original.height), (pageWidth / original.width)) * devicePixelRatio;
             const viewport = page.getViewport({ scale });
 
             canvas.width = viewport.width;
             canvas.height = viewport.height;
 
-            if (window.innerWidth < window.innerHeight) {
-                canvas.style.width = '100%';
-                canvas.style.height = 'auto';
-            } else {
-                canvas.style.height = '100%';
-                canvas.style.width = 'auto';
-            }
+            canvas.style.maxWidth = `${100 / this.pdfPlayerSettings.pagesPerView}%`;
+            canvas.style.maxHeight = '100%';
 
             const context = canvas.getContext('2d');
 

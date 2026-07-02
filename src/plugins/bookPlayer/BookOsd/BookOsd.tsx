@@ -15,7 +15,6 @@ interface BookOsdProps {
     onIncreaseFontSize?: () => void;
     onToggleFullscreen?: () => void;
     onStartReadingHere?: () => void;
-    onResumeFromSaved?: () => void;
     onStopReading?: () => void;
     onPauseReading?: () => void;
     onResumeReading?: () => void;
@@ -37,7 +36,6 @@ const BookOsd: FC<BookOsdProps> = ({
     onIncreaseFontSize,
     onToggleFullscreen,
     onStartReadingHere,
-    onResumeFromSaved,
     onStopReading,
     onPauseReading,
     onResumeReading,
@@ -65,6 +63,13 @@ const BookOsd: FC<BookOsdProps> = ({
         setWakeLockActive(state => !state);
     }, [onToggleWakeLock]);
 
+    const onClickPlay = useCallback(() => {
+        onStartReadingHere?.();
+        setReading(true);
+        setPaused(false);
+        setControlsShown(true);
+    }, [onStartReadingHere]);
+
     const onClickRead = useCallback(() => {
         if (reading) {
             onStopReading?.();
@@ -74,21 +79,9 @@ const BookOsd: FC<BookOsdProps> = ({
         } else if (controlsShown) {
             setControlsShown(false);
         } else {
-            setControlsShown(true);
+            onClickPlay();
         }
-    }, [reading, controlsShown, onStopReading]);
-
-    const onClickPlay = useCallback(() => {
-        onStartReadingHere?.();
-        setReading(true);
-        setPaused(false);
-    }, [onStartReadingHere]);
-
-    const onClickResume = useCallback(() => {
-        onResumeFromSaved?.();
-        setReading(true);
-        setPaused(false);
-    }, [onResumeFromSaved]);
+    }, [controlsShown, onClickPlay, reading, onStopReading]);
 
     const onClickPauseResume = useCallback(() => {
         if (paused) {
@@ -137,38 +130,34 @@ const BookOsd: FC<BookOsdProps> = ({
             </div>
 
             <div className='bookOsdBottomGroup'>
-                {controlsShown && !reading && (
+                {(controlsShown || reading) && (
                     <div className='bookOsdRow bookOsdTtsControls'>
-                        <IconButton
-                            onClick={onClickPlay}
-                            icon='play_circle'
-                            title='Start reading this page'
-                        />
-                        <IconButton
-                            onClick={onClickResume}
-                            icon='replay'
-                            title='Resume last position'
-                        />
-                    </div>
-                )}
-
-                {reading && (
-                    <div className='bookOsdRow bookOsdTtsControls'>
-                        <IconButton
-                            onClick={onJumpBack}
-                            icon='fast_rewind'
-                            title='Previous sentence'
-                        />
-                        <IconButton
-                            onClick={onClickPauseResume}
-                            icon={paused ? 'play_arrow' : 'pause'}
-                            title={paused ? 'Resume' : 'Pause'}
-                        />
-                        <IconButton
-                            onClick={onJumpForward}
-                            icon='fast_forward'
-                            title='Next sentence'
-                        />
+                        {reading && (
+                            <div className='bookOsdTtsTransport'>
+                                <IconButton
+                                    onClick={onJumpBack}
+                                    icon='fast_rewind'
+                                    title='Previous sentence'
+                                />
+                                <IconButton
+                                    onClick={onClickPauseResume}
+                                    icon={paused ? 'play_arrow' : 'pause'}
+                                    title={paused ? 'Resume' : 'Pause'}
+                                />
+                                <IconButton
+                                    onClick={onJumpForward}
+                                    icon='fast_forward'
+                                    title='Next sentence'
+                                />
+                            </div>
+                        )}
+                        <div className='bookOsdTtsRight'>
+                            <IconButton
+                                onClick={onClickPlay}
+                                icon='vertical_align_top'
+                                title='Start at top of page'
+                            />
+                        </div>
                     </div>
                 )}
 
@@ -208,10 +197,18 @@ const BookOsd: FC<BookOsdProps> = ({
                         />
                     )}
 
-                    {hasTts && (
+                    {hasTts && reading && (
                         <IconButton
                             onClick={onClickRead}
-                            icon={controlsShown ? 'volume_off' : 'volume_up'}
+                            icon='voice_over_off'
+                            title='Stop reading'
+                        />
+                    )}
+
+                    {hasTts && !reading && (
+                        <IconButton
+                            onClick={onClickRead}
+                            icon={controlsShown ? 'voice_over_off' : 'record_voice_over'}
                             title={controlsShown ? 'Hide reading controls' : 'Read Aloud'}
                         />
                     )}

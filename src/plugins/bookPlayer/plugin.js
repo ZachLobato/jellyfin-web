@@ -62,12 +62,12 @@ export class BookPlayer {
         this.toggleWakeLock = this.toggleWakeLock.bind(this);
         this.onVisibilityChange = this.onVisibilityChange.bind(this);
         this.startReadingHere = this.startReadingHere.bind(this);
-        this.resumeFromSaved = this.resumeFromSaved.bind(this);
         this.stopReading = this.stopReading.bind(this);
         this.pauseReading = this.pauseReading.bind(this);
         this.resumeReading = this.resumeReading.bind(this);
         this.jumpBack = this.jumpBack.bind(this);
         this.jumpForward = this.jumpForward.bind(this);
+        this.storeTtsResumeLocation = this.storeTtsResumeLocation.bind(this);
         this.fullscreen = false;
         this.ttsReader = null;
         this._ttsResumeIndex = null;
@@ -327,7 +327,7 @@ export class BookPlayer {
 
     async previous(e) {
         e?.preventDefault();
-        const wasReading = !!this.ttsReader;
+        const wasReading = !!this.ttsReader && !this.ttsReader.isPaused;
         if (wasReading) {
             this.ttsReader.stop();
             this.ttsReader = null;
@@ -346,7 +346,7 @@ export class BookPlayer {
 
     async next(e) {
         e?.preventDefault();
-        const wasReading = !!this.ttsReader;
+        const wasReading = !!this.ttsReader && !this.ttsReader.isPaused;
         if (wasReading) {
             this.ttsReader.stop();
             this.ttsReader = null;
@@ -365,6 +365,9 @@ export class BookPlayer {
 
     startReadingHere() {
         if (!this.loaded || !this.rendition) return;
+        if (this.ttsReader) {
+            this.ttsReader.stop();
+        }
         this._ttsResumeIndex = null;
         this._ttsResumePct = null;
         this._ttsResumeHref = null;
@@ -372,31 +375,18 @@ export class BookPlayer {
         this.ttsReader.start(0);
     }
 
-    async resumeFromSaved() {
-        if (!this.loaded || !this.rendition) return;
-        const savedIndex = this._ttsResumeIndex ?? 0;
-        const savedPct = this._ttsResumePct;
-        this._ttsResumeIndex = null;
-        this._ttsResumePct = null;
-        this._ttsResumeHref = null;
-
-        if (savedPct != null) {
-            const cfi = this.rendition.book.locations.cfiFromPercentage(savedPct);
-            await this.rendition.display(cfi);
-        }
-
-        this.ttsReader = new TtsReader(this.rendition);
-        this.ttsReader.start(savedIndex);
+    storeTtsResumeLocation() {
+        this._ttsResumeIndex = this.ttsReader?.currentIndex ?? null;
+        const loc = this.rendition?.currentLocation()?.start;
+        this._ttsResumeHref = loc?.href ?? null;
+        this._ttsResumePct = loc?.cfi ?
+            (this.rendition.book.locations.percentageFromCfi(loc.cfi) ?? null) :
+            null;
     }
 
     stopReading() {
         if (this.ttsReader) {
-            this._ttsResumeIndex = this.ttsReader.currentIndex;
-            const loc = this.rendition?.currentLocation()?.start;
-            this._ttsResumeHref = loc?.href ?? null;
-            this._ttsResumePct = loc?.cfi ?
-                (this.rendition.book.locations.percentageFromCfi(loc.cfi) ?? null) :
-                null;
+            this.storeTtsResumeLocation();
             this.ttsReader.stop();
             this.ttsReader = null;
             this._notifyTtsStopped?.();
@@ -405,27 +395,36 @@ export class BookPlayer {
 
     pauseReading() {
         if (!this.ttsReader) return;
-        this._ttsResumeIndex = this.ttsReader.currentIndex;
-        const loc = this.rendition?.currentLocation()?.start;
-        this._ttsResumeHref = loc?.href ?? null;
-        this._ttsResumePct = loc?.cfi ?
-            (this.rendition.book.locations.percentageFromCfi(loc.cfi) ?? null) :
-            null;
-        this.ttsReader.stop();
-        this.ttsReader = null;
-        this._notifyTtsStopped?.();
+        this.storeTtsResumeLocation();
+        this.ttsReader.pause();
     }
 
-    resumeReading() {
-        this.ttsReader?.resume();
+    async resumeReading() {
+        if (!this.ttsReader) return;
+
+        const savedPct = this._ttsResumePct;
+        if (savedPct != null) {
+            const cfi = this.rendition.book.locations.cfiFromPercentage(savedPct);
+            await this.rendition.display(cfi);
+        }
+
+        this.ttsReader.resume();
     }
 
-    jumpBack() {
-        this.ttsReader?.jumpBack(1);
+    async jumpBack() {
+        if (!this.ttsReader) return;
+        await this.ttsReader.jumpBack(1);
+        if (this.ttsReader.isPaused) {
+            this.storeTtsResumeLocation();
+        }
     }
 
-    jumpForward() {
-        this.ttsReader?.jumpForward(1);
+    async jumpForward() {
+        if (!this.ttsReader) return;
+        await this.ttsReader.jumpForward(1);
+        if (this.ttsReader.isPaused) {
+            this.storeTtsResumeLocation();
+        }
     }
 
     createMediaElement(options) {
@@ -465,7 +464,6 @@ export class BookPlayer {
             onRegisterStopHandler: (fn) => { this._notifyTtsStopped = fn; },
             onRegisterPageUpdateHandler: (fn) => { this._notifyPageUpdate = fn; },
             onStartReadingHere: this.startReadingHere,
-            onResumeFromSaved: this.resumeFromSaved,
             onStopReading: this.stopReading,
             onPauseReading: this.pauseReading,
             onResumeReading: this.resumeReading,

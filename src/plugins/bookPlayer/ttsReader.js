@@ -6,6 +6,7 @@ const SECTION_BREAK_RE = /(^|\s)(?:(?:\*\s*){3,}|(?:[-–—]\s*){3,})(?=\s|$)/g
 const DATE_RANGE_SEPARATOR_RE = /(\b\d{1,2}\/\d{1,2}\/\d{2,4})\s*[|–—-]\s*(\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
 const LEADING_DATE_MARKER_RE = /(^|\s)\*\s+(?=\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
 const DATE_SPEECH_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
+const SENTENCE_TERMINATOR_RE = /[.!?]["”'’)]*$/;
 const MONTH_NAMES = [
     'January',
     'February',
@@ -56,6 +57,7 @@ class BrowserAudioQueue {
     }
 
     reset(startIndex) {
+        this._stopped = false;
         this._doneReceived = false;
         this._buffers.clear();
         this._nextIndex = startIndex;
@@ -111,7 +113,14 @@ class BrowserAudioQueue {
 
     stop() {
         this._stopped = true;
-        this.reset(0);
+        this._doneReceived = false;
+        this._buffers.clear();
+        this._nextIndex = 0;
+        if (this._currentSource) {
+            try { this._currentSource.stop(); } catch (_) {}
+            this._currentSource = null;
+        }
+        this._playing = false;
         if (this._ctx) {
             this._ctx.close().catch(() => {});
             this._ctx = null;
@@ -158,6 +167,7 @@ class TtsReader {
         this._emptyRetried = false;
         this._awaitingNextPage = false;
         this._startAtPageEnd = false;
+        this._skipFirstSentenceOnNextPageText = null;
 
         // 'rendered' fires only when a new section/chapter view is created — NOT on
         // column turns within a section. Use it for per-section setup (CSS injection)
@@ -167,14 +177,14 @@ class TtsReader {
             this._injectHighlightCss();
             // Skip while a page turn is in flight — the continuation runs on 'relocated'
             // and the old page's sentences must not be processed against the new DOM.
-            if (!this.isActive || this._awaitingNextPage) return;
+            if (!this.isActive || this._awaitingNextPage || this.isPaused) return;
 
             if (!this.allSentences.length) return;
             const fresh = this._extractPageSentences();
-            const byText = new Map(fresh.map(s => [s.text, s.nodes]));
+            const byText = new Map(fresh.map(s => [s.text, s.ranges]));
             for (const s of this.allSentences) {
-                const freshNodes = byText.get(s.text);
-                if (freshNodes) s.nodes = freshNodes;
+                const freshRanges = byText.get(s.text);
+                if (freshRanges) s.ranges = freshRanges;
             }
             if (this.currentIndex < this.allSentences.length) {
                 this._highlightSentence(this.currentIndex);
@@ -188,11 +198,9 @@ class TtsReader {
         this._relocatedHandler = () => {
             if (!this.isActive || !this._awaitingNextPage) return;
             this._awaitingNextPage = false;
-            if (!this.isPaused) {
-                this._sendCurrentPage();
-                if (this.allSentences.length > 0) {
-                    this._highlightSentence(this.currentIndex);
-                }
+            this._sendCurrentPage(!this.isPaused);
+            if (this.allSentences.length > 0) {
+                this._highlightSentence(this.currentIndex);
             }
         };
 
@@ -233,6 +241,7 @@ class TtsReader {
         this._carryOverText = '';
         this._carryOverNodes = [];
         this._startAtPageEnd = false;
+        this._skipFirstSentenceOnNextPageText = null;
 
         this._audioQueue.stop();
         this.rendition.off('rendered', this._renderedHandler);
@@ -259,6 +268,7 @@ class TtsReader {
     resume() {
         if (!this.isActive || !this.isPaused) return;
         this.isPaused = false;
+        this.refreshHighlight();
         this._audioQueue.resume();
         // If queue exhausted during pause, re-request from server
         if (!this._audioQueue._playing && this._audioQueue._buffers.size === 0) {
@@ -267,10 +277,10 @@ class TtsReader {
     }
 
     jumpBack(n = 1) {
-        if (!this.isActive) return;
+        if (!this.isActive) return Promise.resolve();
         const idx = this.currentIndex - n;
         if (idx < 0) {
-            if (this._awaitingNextPage) return;
+            if (this._awaitingNextPage) return Promise.resolve();
             this._wsSend({ type: 'stop' });
             this._audioQueue.reset(0);
             this._clearHighlights();
@@ -278,41 +288,82 @@ class TtsReader {
             // Resume at the LAST sentence of the previous page, not its first, so
             // jump-back steps sentence by sentence across the boundary.
             this._startAtPageEnd = true;
-            this.rendition.prev().catch(() => {
+            return this.rendition.prev().catch(() => {
                 this.isActive = false;
                 this._awaitingNextPage = false;
                 this._startAtPageEnd = false;
             });
         } else {
-            this.isPaused = false;
+            this._wsSend({ type: 'stop' });
             this._clearHighlights();
             this._highlightSentence(idx);
             this._audioQueue.reset(idx);
-            this._sendSentences(this.allSentences, idx);
+            this.currentIndex = idx;
+            if (!this.isPaused) {
+                this._sendSentences(this.allSentences, idx);
+            }
         }
+        return Promise.resolve();
     }
 
     jumpForward(n = 1) {
-        if (!this.isActive) return;
+        if (!this.isActive) return Promise.resolve();
         const target = this.currentIndex + n;
         if (target >= this.allSentences.length) {
-            if (this._awaitingNextPage) return;
+            if (this._awaitingNextPage) return Promise.resolve();
             this._wsSend({ type: 'stop' });
             this._audioQueue.reset(this.allSentences.length);
-            this._onPageDone();
+            return this._onPageDone();
         } else {
-            this.isPaused = false;
+            this._wsSend({ type: 'stop' });
             this._clearHighlights();
             this._highlightSentence(target);
             this._audioQueue.reset(target);
-            this._sendSentences(this.allSentences, target);
+            this.currentIndex = target;
+            if (!this.isPaused) {
+                this._sendSentences(this.allSentences, target);
+            }
+        }
+        return Promise.resolve();
+    }
+
+    refreshHighlight() {
+        if (!this.isActive || !this.allSentences.length) return;
+
+        const fresh = this._extractPageSentences();
+        const byText = new Map(fresh.map(s => [s.text, s.ranges]));
+        for (const sentence of this.allSentences) {
+            const freshRanges = byText.get(sentence.text);
+            if (freshRanges) sentence.ranges = freshRanges;
+        }
+
+        this._injectHighlightCss();
+        if (this.currentIndex < this.allSentences.length) {
+            this._highlightSentence(this.currentIndex);
         }
     }
 
     // ─── Internal ──────────────────────────────────────────────────────────────
 
-    _sendCurrentPage() {
-        const sentences = this._extractPageSentences();
+    _sendCurrentPage(speak = true) {
+        let sentences = this._extractPageSentences();
+        if (this._skipFirstSentenceOnNextPageText && sentences.length > 0) {
+            const skippedText = this._skipFirstSentenceOnNextPageText;
+            this._skipFirstSentenceOnNextPageText = null;
+
+            if (sentences[0]?.text === skippedText) {
+                if (sentences.length > 1) {
+                    sentences = sentences.slice(1);
+                } else if (this.isActive && !this.isPaused && speak) {
+                    setTimeout(() => {
+                        if (this.isActive && !this.isPaused && !this._awaitingNextPage) {
+                            this._onPageDone();
+                        }
+                    }, 0);
+                    return;
+                }
+            }
+        }
 
         // Start from the text visible on the current page. Page breaks in ebooks
         // often split a sentence or end a line with punctuation other than .!?;
@@ -323,6 +374,7 @@ class TtsReader {
         this.allSentences = sentences;
 
         let idx;
+        const allowLookAhead = !this._startAtPageEnd;
         if (this._startAtPageEnd && sentences.length > 0) {
             // Resumed via a backward jump — start at the LAST sentence of this
             // (previous) page so jump-back steps sentence by sentence, not page by page.
@@ -333,7 +385,6 @@ class TtsReader {
         }
         this._initialStartIndex = 0; // only applies to the first page
         this.currentIndex = idx;
-        this._sentStartIndex = idx;
         this._audioQueue.reset(idx);
 
         if (sentences.length === 0) {
@@ -349,20 +400,33 @@ class TtsReader {
             return;
         }
         this._emptyRetried = false;
+        this._injectHighlightCss();
+
+        if (!speak || this.isPaused) {
+            if (sentences.length > 0) {
+                this._highlightSentence(idx);
+            }
+            return;
+        }
+
+        const speakSentences = allowLookAhead ?
+            this._mergeNextPageFirstFragment(sentences) :
+            sentences;
+        this.allSentences = speakSentences;
+        const serverStartIndex = idx;
+        this._sentStartIndex = serverStartIndex;
 
         // Reconnect if the WebSocket was closed (e.g. by a prior 'stop' message)
         if (!this.ws || this.ws.readyState !== 1) {
-            this._reconnectAndSpeak(sentences, idx);
+            this._reconnectAndSpeak(speakSentences, serverStartIndex);
             return;
         }
 
         this._wsSend({
             type: 'speak',
-            sentences: sentences.map(s => s.text),
-            startIndex: idx
+            sentences: speakSentences.map(s => s.text),
+            startIndex: serverStartIndex
         });
-
-        this._injectHighlightCss();
     }
 
     _reconnectAndSpeak(sentences, startIndex) {
@@ -401,7 +465,25 @@ class TtsReader {
         });
     }
 
-    _extractPageSentences() {
+    _mergeNextPageFirstFragment(sentences) {
+        if (!sentences.length) return sentences;
+
+        const lastCurrent = sentences[sentences.length - 1];
+        if (!lastCurrent || SENTENCE_TERMINATOR_RE.test(lastCurrent.text)) {
+            return sentences;
+        }
+
+        const firstNext = this._extractPageSentences(1)[0];
+        if (!firstNext) return sentences;
+
+        this._skipFirstSentenceOnNextPageText = firstNext.text;
+        return sentences.slice(0, -1).concat({
+            text: `${lastCurrent.text} ${firstNext.text}`,
+            ranges: lastCurrent.ranges.concat(firstNext.ranges)
+        });
+    }
+
+    _extractPageSentences(pageOffset = 0) {
         const contents = this.rendition.getContents();
         if (!contents?.length) return [];
 
@@ -425,22 +507,23 @@ class TtsReader {
         const epubContainer = document.querySelector('.epub-container');
         const containerWidth = epubContainer ? epubContainer.clientWidth : window.innerWidth;
         const containerHeight = epubContainer ? epubContainer.clientHeight : window.innerHeight;
-        const scrollX = epubContainer?.scrollLeft ?? 0;
+        const scrollX = (epubContainer?.scrollLeft ?? 0) + (containerWidth * pageOffset);
 
         const visibleNodes = this._getVisibleTextNodes(doc, containerWidth, containerHeight, scrollX);
 
-        const nodeRanges = [];
         let fullText = '';
+        const textMap = [];
         for (const node of visibleNodes) {
-            const start = fullText.length;
-            const chunk = node.textContent.replace(/\s+/g, ' ').trim();
-            if (!chunk) continue;
-            fullText += chunk + ' ';
-            const leadingWhiteSpace = node.textContent.length - node.textContent.trimStart().length;
-            nodeRanges.push({ node, start, end: fullText.length, chunkLength: chunk.length, leadingWhiteSpace });
+            const result = this._appendMappedText(fullText, textMap, node, doc, containerWidth, containerHeight, scrollX);
+            fullText = result.fullText;
         }
 
-        fullText = prepareTextForSentenceSplit(fullText.trim());
+        while (fullText.endsWith(' ')) {
+            fullText = fullText.slice(0, -1);
+            textMap.pop();
+        }
+
+        fullText = prepareTextForSentenceSplit(fullText);
 
         const rawSentences = [];
         let match;
@@ -453,62 +536,110 @@ class TtsReader {
             rawSentences.push({ text, sentStart, sentEnd });
         }
 
-        const sentenceNodes = rawSentences.map(() => []);
-
-        for (const nr of nodeRanges) {
-            const overlapping = rawSentences
-                .map((s, i) => ({ ...s, sentIndex: i }))
-                .filter(s => s.sentStart < nr.end && s.sentEnd > nr.start);
-
-            if (overlapping.length === 0) continue;
-
-            if (overlapping.length === 1) {
-                sentenceNodes[overlapping[0].sentIndex].push(nr.node);
-                continue;
-            }
-
-            // Node spans multiple sentences — split at each sentence boundary
-            let currentNode = nr.node;
-            let currentOffset = 0;
-
-            for (let si = 0; si < overlapping.length; si++) {
-                const s = overlapping[si];
-                const isLast = si === overlapping.length - 1;
-
-                if (isLast) {
-                    sentenceNodes[s.sentIndex].push(currentNode);
-                } else {
-                    const sentEndInOriginal = nr.leadingWhiteSpace + Math.min(s.sentEnd - nr.start, nr.chunkLength);
-                    const splitAt = sentEndInOriginal - currentOffset;
-
-                    if (splitAt > 0 && splitAt < currentNode.textContent.length) {
-                        const nextNode = currentNode.splitText(splitAt);
-                        sentenceNodes[s.sentIndex].push(currentNode);
-                        currentNode = nextNode;
-                        currentOffset = sentEndInOriginal;
-                    } else {
-                        sentenceNodes[s.sentIndex].push(currentNode);
-                        break;
-                    }
-                }
-            }
-        }
-
-        const result = rawSentences.map((s, i) => ({ text: s.text, nodes: sentenceNodes[i] }));
+        const result = rawSentences.map(s => ({
+            text: s.text,
+            ranges: this._getMappedRanges(textMap, s.sentStart, s.sentEnd)
+        }));
 
         // Drop leading cross-page fragment: if the first sentence's first node starts before
         // the current page's left edge, it's a continuation from the previous page.
-        if (result.length > 0 && result[0].nodes.length > 0) {
+        if (result.length > 0 && result[0].ranges.length > 0) {
             try {
-                const r = doc.createRange();
-                r.selectNode(result[0].nodes[0]);
-                if (r.getBoundingClientRect().left < scrollX) {
+                const range = this._createDomRange(doc, result[0].ranges[0]);
+                if (range?.getBoundingClientRect().left < scrollX) {
                     result.shift();
                 }
             } catch {}
         }
 
         return result;
+    }
+
+    _appendMappedText(fullText, textMap, node, doc, containerWidth, containerHeight, scrollX) {
+        const sourceText = node.textContent;
+        let hasText = false;
+
+        for (let offset = 0; offset < sourceText.length; offset++) {
+            if (!this._isTextOffsetVisible(doc, node, offset, containerWidth, containerHeight, scrollX)) {
+                continue;
+            }
+
+            const char = sourceText[offset];
+            const isWhiteSpace = /\s/.test(char);
+
+            if (isWhiteSpace) {
+                if (hasText && !fullText.endsWith(' ')) {
+                    fullText += ' ';
+                    textMap.push({ node, offset });
+                }
+                continue;
+            }
+
+            if (!hasText && fullText && !fullText.endsWith(' ')) {
+                fullText += ' ';
+                textMap.push({ node, offset });
+            }
+
+            fullText += char;
+            textMap.push({ node, offset });
+            hasText = true;
+        }
+
+        return { fullText };
+    }
+
+    _isTextOffsetVisible(doc, node, offset, containerWidth, containerHeight, scrollX) {
+        try {
+            const range = doc.createRange();
+            range.setStart(node, offset);
+            range.setEnd(node, offset + 1);
+
+            return Array.from(range.getClientRects()).some(rect => (
+                rect.width >= 0
+                && rect.height > 0
+                && rect.right > scrollX
+                && rect.left < scrollX + containerWidth
+                && rect.bottom > 0
+                && rect.top < containerHeight
+            ));
+        } catch {
+            return false;
+        }
+    }
+
+    _getMappedRanges(textMap, start, end) {
+        const ranges = [];
+        let current = null;
+
+        while (start < end && /\s/.test(textMap[start]?.node?.textContent?.[textMap[start].offset] ?? '')) {
+            start++;
+        }
+
+        while (end > start && /\s/.test(textMap[end - 1]?.node?.textContent?.[textMap[end - 1].offset] ?? '')) {
+            end--;
+        }
+
+        for (let i = start; i < end; i++) {
+            const mapped = textMap[i];
+            if (!mapped) continue;
+
+            if (
+                current
+                && current.node === mapped.node
+                && current.endOffset === mapped.offset
+            ) {
+                current.endOffset = mapped.offset + 1;
+            } else {
+                current = {
+                    node: mapped.node,
+                    startOffset: mapped.offset,
+                    endOffset: mapped.offset + 1
+                };
+                ranges.push(current);
+            }
+        }
+
+        return ranges;
     }
 
     _getVisibleTextNodes(doc, containerWidth, containerHeight, scrollX = 0) {
@@ -556,14 +687,25 @@ class TtsReader {
             const style = doc.createElement('style');
             style.id = 'tts-highlight-style';
             style.textContent = [
-                '.tts-highlight {',
-                '  background-color: rgba(255, 220, 0, 0.45);',
+                '.tts-highlight-overlay-root {',
+                '  position: absolute;',
+                '  left: 0;',
+                '  top: 0;',
+                '  width: 0;',
+                '  height: 0;',
+                '  pointer-events: none;',
+                '  z-index: 2147483647;',
+                '}',
+                '.tts-highlight-rect {',
+                '  position: absolute;',
                 '  border-radius: 2px;',
                 '  transition: background-color 0.15s ease;',
                 '}',
-                '.tts-highlight-next {',
+                '.tts-highlight-rect.tts-highlight {',
+                '  background-color: rgba(255, 220, 0, 0.45);',
+                '}',
+                '.tts-highlight-rect.tts-highlight-next {',
                 '  background-color: rgba(204, 176, 0, 0.35);',
-                '  border-radius: 2px;',
                 '}'
             ].join('\n');
             doc.head.appendChild(style);
@@ -572,25 +714,64 @@ class TtsReader {
 
     _highlightSentence(absoluteIndex) {
         this._clearHighlights();
-        this._wrapNodes(absoluteIndex, 'tts-highlight');
-        this._wrapNodes(absoluteIndex + 1, 'tts-highlight-next');
+        this._paintRangeHighlights(absoluteIndex, 'tts-highlight');
+        this._paintRangeHighlights(absoluteIndex + 1, 'tts-highlight-next');
     }
 
-    _wrapNodes(absoluteIndex, className) {
+    _paintRangeHighlights(absoluteIndex, className) {
         const sentence = this.allSentences[absoluteIndex];
-        if (!sentence?.nodes?.length) return;
+        if (!sentence?.ranges?.length) return;
 
         const contents = this.rendition.getContents();
         if (!contents?.length) return;
-        const doc = contents[0]?.document;
-        if (!doc) return;
+        const doc = sentence.ranges[0].node?.ownerDocument;
+        if (!doc?.body) return;
 
-        for (const node of sentence.nodes) {
-            if (!doc.contains(node) || !node.parentNode) continue;
-            const span = doc.createElement('span');
-            span.className = className;
-            node.parentNode.insertBefore(span, node);
-            span.appendChild(node);
+        const overlayRoot = this._getHighlightOverlayRoot(doc);
+        const win = doc.defaultView ?? window;
+
+        for (const rangeInfo of sentence.ranges) {
+            const range = this._createDomRange(doc, rangeInfo);
+            if (!range) continue;
+
+            for (const rect of range.getClientRects()) {
+                if (rect.width <= 0 || rect.height <= 0) continue;
+
+                const highlight = doc.createElement('span');
+                highlight.className = `tts-highlight-rect ${className}`;
+                highlight.style.left = `${rect.left + win.scrollX}px`;
+                highlight.style.top = `${rect.top + win.scrollY}px`;
+                highlight.style.width = `${rect.width}px`;
+                highlight.style.height = `${rect.height}px`;
+                overlayRoot.appendChild(highlight);
+            }
+        }
+    }
+
+    _getHighlightOverlayRoot(doc) {
+        let overlayRoot = doc.getElementById('tts-highlight-overlay-root');
+        if (!overlayRoot) {
+            overlayRoot = doc.createElement('div');
+            overlayRoot.id = 'tts-highlight-overlay-root';
+            overlayRoot.className = 'tts-highlight-overlay-root';
+            doc.body.appendChild(overlayRoot);
+        }
+
+        return overlayRoot;
+    }
+
+    _createDomRange(doc, rangeInfo) {
+        const { node, startOffset, endOffset } = rangeInfo;
+        if (!node || !doc.contains(node) || !node.parentNode) return null;
+        if (startOffset < 0 || endOffset > node.textContent.length || startOffset >= endOffset) return null;
+
+        try {
+            const range = doc.createRange();
+            range.setStart(node, startOffset);
+            range.setEnd(node, endOffset);
+            return range;
+        } catch {
+            return null;
         }
     }
 
@@ -601,6 +782,8 @@ class TtsReader {
         for (const content of contents) {
             const doc = content?.document;
             if (!doc) continue;
+
+            doc.getElementById('tts-highlight-overlay-root')?.remove();
 
             const spans = doc.querySelectorAll('.tts-highlight, .tts-highlight-next');
             for (const span of spans) {

@@ -23,8 +23,21 @@
 
 .bookOsdRow.bookOsdTtsControls {
     justify-content: center;
-    gap: 0.5rem;
     background: transparent;
+    position: relative;
+}
+
+.bookOsdTtsTransport {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.bookOsdTtsRight {
+    position: absolute;
+    right: 0.8vw;
+    display: flex;
+    align-items: center;
 }
 
 .bookOsdRow {

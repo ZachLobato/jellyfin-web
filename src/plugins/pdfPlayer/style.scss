@@ -80,7 +80,8 @@
         opacity: 0.7;
     }
 
-    .btnToggleColorInversion.active .actionButtonIcon {
+    .btnToggleColorInversion.active .actionButtonIcon,
+    .btnTogglePageAdvance.active .actionButtonIcon {
         opacity: 1;
     }
 }

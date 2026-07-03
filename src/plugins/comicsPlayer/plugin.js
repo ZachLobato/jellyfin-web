@@ -27,6 +27,7 @@ export class ComicsPlayer {
 
         this.onDialogClosed = this.onDialogClosed.bind(this);
         this.onWindowKeyDown = this.onWindowKeyDown.bind(this);
+        this.onPageAdvanceChanged = this.onPageAdvanceChanged.bind(this);
     }
 
     play(options) {
@@ -139,16 +140,40 @@ export class ComicsPlayer {
             view = 1;
         }
 
-        this.changeView(view);
-
         this.comicsPlayerSettings.pagesPerView = view;
+        this.changeView(view);
     };
+
+    onPageAdvanceChanged() {
+        this.comicsPlayerSettings.advanceOnePage = !this.comicsPlayerSettings.advanceOnePage;
+        this.changePageAdvance();
+    }
+
+    getPageAdvance() {
+        return this.comicsPlayerSettings.advanceOnePage && this.comicsPlayerSettings.pagesPerView > 1 ? 1 : this.comicsPlayerSettings.pagesPerView;
+    }
+
+    updatePageAdvanceButton() {
+        const enabled = this.comicsPlayerSettings.advanceOnePage && this.comicsPlayerSettings.pagesPerView > 1;
+        const button = this.mediaElement.querySelector('.btnTogglePageAdvance');
+
+        button.title = enabled ? 'Advance by Spread' : 'Advance One Page';
+        button.classList.toggle('active', enabled);
+        button.classList.toggle('hide', this.comicsPlayerSettings.pagesPerView <= 1);
+        button.setAttribute('aria-pressed', enabled.toString());
+    }
+
+    changePageAdvance() {
+        this.swiperInstance.params.slidesPerGroup = this.getPageAdvance();
+        this.updatePageAdvanceButton();
+        this.reload(this.currentPage);
+    }
 
     changeView(view) {
         const currentPage = this.currentPage;
 
         this.swiperInstance.params.slidesPerView = view;
-        this.swiperInstance.params.slidesPerGroup = view;
+        this.swiperInstance.params.slidesPerGroup = this.getPageAdvance();
 
         const prevIcon = view === 1 ? 'devices_fold' : 'import_contacts';
         this.mediaElement.querySelector('.btnToggleView > span').classList.remove(prevIcon);
@@ -158,6 +183,7 @@ export class ComicsPlayer {
 
         const viewTitle = view === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+        this.updatePageAdvanceButton();
 
         this.reload(currentPage);
     }
@@ -197,6 +223,7 @@ export class ComicsPlayer {
         elem?.addEventListener('close', this.onDialogClosed, { once: true });
         elem?.querySelector('.btnExit').addEventListener('click', this.onDialogClosed, { once: true });
         elem?.querySelector('.btnToggleLangDir').addEventListener('click', this.onDirChanged);
+        elem?.querySelector('.btnTogglePageAdvance').addEventListener('click', this.onPageAdvanceChanged);
         elem?.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
     }
 
@@ -212,6 +239,7 @@ export class ComicsPlayer {
         elem?.removeEventListener('close', this.onDialogClosed);
         elem?.querySelector('.btnExit').removeEventListener('click', this.onDialogClosed);
         elem?.querySelector('.btnToggleLangDir').removeEventListener('click', this.onDirChanged);
+        elem?.querySelector('.btnTogglePageAdvance').removeEventListener('click', this.onPageAdvanceChanged);
         elem?.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
     }
 
@@ -253,6 +281,9 @@ export class ComicsPlayer {
                                 <button is="paper-icon-button-light" class="autoSize btnToggleLangDir" tabindex="-1">
                                     <span class="material-icons actionButtonIcon ${dirIcon}" aria-hidden="true"></span>
                                 </button>
+                                <button is="paper-icon-button-light" class="autoSize btnTogglePageAdvance" tabindex="-1">
+                                    <span class="material-icons actionButtonIcon looks_one" aria-hidden="true"></span>
+                                </button>
                                 <button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1">
                                     <span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span>
                                 </button>
@@ -271,6 +302,7 @@ export class ComicsPlayer {
 
         const viewTitle = this.comicsPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+        this.updatePageAdvanceButton();
 
         this.bindEvents();
         return elem;
@@ -330,7 +362,7 @@ export class ComicsPlayer {
                     },
                     preloadImages: true,
                     slidesPerView: this.comicsPlayerSettings.pagesPerView,
-                    slidesPerGroup: this.comicsPlayerSettings.pagesPerView,
+                    slidesPerGroup: this.getPageAdvance(),
                     slidesPerColumn: 1,
                     initialSlide: this.currentPage,
                     navigation: {

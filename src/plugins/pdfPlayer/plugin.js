@@ -42,6 +42,7 @@ export class PdfPlayer {
         this.onNextButtonClick = this.onNextButtonClick.bind(this);
         this.onPreviousButtonClick = this.onPreviousButtonClick.bind(this);
         this.onColorInversionChanged = this.onColorInversionChanged.bind(this);
+        this.onPageAdvanceChanged = this.onPageAdvanceChanged.bind(this);
         this.onViewChanged = this.onViewChanged.bind(this);
     }
 
@@ -567,6 +568,11 @@ export class PdfPlayer {
         this.updateColorInversion();
     }
 
+    onPageAdvanceChanged() {
+        this.pdfPlayerSettings.advanceOnePage = !this.pdfPlayerSettings.advanceOnePage;
+        this.updatePageAdvanceButton();
+    }
+
     updateColorInversion() {
         const enabled = this.pdfPlayerSettings.invertColors;
 
@@ -576,6 +582,20 @@ export class PdfPlayer {
         button.title = enabled ? 'Disable Color Inversion' : 'Invert Colors';
         button.classList.toggle('active', enabled);
         button.setAttribute('aria-pressed', enabled.toString());
+    }
+
+    updatePageAdvanceButton() {
+        const enabled = this.pdfPlayerSettings.advanceOnePage && this.pdfPlayerSettings.pagesPerView > 1;
+        const button = this.mediaElement.querySelector('.btnTogglePageAdvance');
+
+        button.title = enabled ? 'Advance by Spread' : 'Advance One Page';
+        button.classList.toggle('active', enabled);
+        button.classList.toggle('hide', this.pdfPlayerSettings.pagesPerView <= 1);
+        button.setAttribute('aria-pressed', enabled.toString());
+    }
+
+    getPageAdvance() {
+        return this.pdfPlayerSettings.advanceOnePage && this.pdfPlayerSettings.pagesPerView > 1 ? 1 : this.pdfPlayerSettings.pagesPerView;
     }
 
     changeView(view) {
@@ -589,6 +609,7 @@ export class PdfPlayer {
 
         const viewTitle = view === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+        this.updatePageAdvanceButton();
 
         this.pages = {};
         this.loadPage(this.progress + 1);
@@ -600,6 +621,7 @@ export class PdfPlayer {
         elem.addEventListener('close', this.onDialogClosed, { once: true });
         elem.querySelector('.btnExit').addEventListener('click', this.onDialogClosed, { once: true });
         elem.querySelector('.btnToggleColorInversion').addEventListener('click', this.onColorInversionChanged);
+        elem.querySelector('.btnTogglePageAdvance').addEventListener('click', this.onPageAdvanceChanged);
         elem.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
         elem.querySelector('.pdfNavButtonNext').addEventListener('click', this.onNextButtonClick);
         elem.querySelector('.pdfNavButtonPrevious').addEventListener('click', this.onPreviousButtonClick);
@@ -628,6 +650,7 @@ export class PdfPlayer {
         elem.removeEventListener('close', this.onDialogClosed);
         elem.querySelector('.btnExit').removeEventListener('click', this.onDialogClosed);
         elem.querySelector('.btnToggleColorInversion').removeEventListener('click', this.onColorInversionChanged);
+        elem.querySelector('.btnTogglePageAdvance').removeEventListener('click', this.onPageAdvanceChanged);
         elem.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
         elem.querySelector('.pdfNavButtonNext').removeEventListener('click', this.onNextButtonClick);
         elem.querySelector('.pdfNavButtonPrevious').removeEventListener('click', this.onPreviousButtonClick);
@@ -677,6 +700,7 @@ export class PdfPlayer {
             html += '<button is="paper-icon-button-light" class="pdfNavButton pdfNavButtonNext" tabindex="-1"><span class="material-icons actionButtonIcon chevron_right" aria-hidden="true"></span></button>';
             html += '<div class="actionButtons">';
             html += '<button is="paper-icon-button-light" class="autoSize btnToggleColorInversion" tabindex="-1"><span class="material-icons actionButtonIcon invert_colors" aria-hidden="true"></span></button>';
+            html += '<button is="paper-icon-button-light" class="autoSize btnTogglePageAdvance" tabindex="-1"><span class="material-icons actionButtonIcon looks_one" aria-hidden="true"></span></button>';
             html += `<button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1"><span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span></button>`;
             html += '<button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1"><span class="material-icons actionButtonIcon close" aria-hidden="true"></span></button>';
             html += '</div>';
@@ -691,6 +715,7 @@ export class PdfPlayer {
 
         const viewTitle = this.pdfPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
+        this.updatePageAdvanceButton();
         this.updateColorInversion();
 
         return elem;
@@ -746,7 +771,7 @@ export class PdfPlayer {
     next() {
         if (this.progress >= this.duration() - 1) return;
 
-        const nextProgress = Math.min(this.progress + this.pdfPlayerSettings.pagesPerView, this.duration() - 1);
+        const nextProgress = Math.min(this.progress + this.getPageAdvance(), this.duration() - 1);
         this.loadPage(nextProgress + 1);
         this.progress = nextProgress;
 
@@ -756,7 +781,7 @@ export class PdfPlayer {
     previous() {
         if (this.progress === 0) return;
 
-        const previousProgress = Math.max(this.progress - this.pdfPlayerSettings.pagesPerView, 0);
+        const previousProgress = Math.max(this.progress - this.getPageAdvance(), 0);
         this.loadPage(previousProgress + 1);
         this.progress = previousProgress;
 

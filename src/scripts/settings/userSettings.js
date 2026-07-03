@@ -54,10 +54,12 @@ const defaultSubtitleAppearanceSettings = {
 
 const defaultComicsPlayerSettings = {
     langDir: 'ltr',
+    advanceOnePage: false,
     pagesPerView: 1
 };
 
 const defaultPdfPlayerSettings = {
+    advanceOnePage: false,
     invertColors: false,
     pagesPerView: 1
 };

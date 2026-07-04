@@ -7,6 +7,7 @@ const DATE_RANGE_SEPARATOR_RE = /(\b\d{1,2}\/\d{1,2}\/\d{2,4})\s*[|–—-]\s*(\
 const LEADING_DATE_MARKER_RE = /(^|\s)\*\s+(?=\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
 const DATE_SPEECH_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
 const SENTENCE_TERMINATOR_RE = /[.!?]["”'’)]*$/;
+const NEXT_PAGE_LOOKAHEAD_SENTENCE_COUNT = 2;
 const MONTH_NAMES = [
     'January',
     'February',
@@ -167,7 +168,7 @@ class TtsReader {
         this._emptyRetried = false;
         this._awaitingNextPage = false;
         this._startAtPageEnd = false;
-        this._skipFirstSentenceOnNextPageText = null;
+        this._skipSentencesOnNextPageTexts = [];
 
         // 'rendered' fires only when a new section/chapter view is created — NOT on
         // column turns within a section. Use it for per-section setup (CSS injection)
@@ -241,7 +242,7 @@ class TtsReader {
         this._carryOverText = '';
         this._carryOverNodes = [];
         this._startAtPageEnd = false;
-        this._skipFirstSentenceOnNextPageText = null;
+        this._skipSentencesOnNextPageTexts = [];
 
         this._audioQueue.stop();
         this.rendition.off('rendered', this._renderedHandler);
@@ -347,21 +348,15 @@ class TtsReader {
 
     _sendCurrentPage(speak = true) {
         let sentences = this._extractPageSentences();
-        if (this._skipFirstSentenceOnNextPageText && sentences.length > 0) {
-            const skippedText = this._skipFirstSentenceOnNextPageText;
-            this._skipFirstSentenceOnNextPageText = null;
-
-            if (sentences[0]?.text === skippedText) {
-                if (sentences.length > 1) {
-                    sentences = sentences.slice(1);
-                } else if (this.isActive && !this.isPaused && speak) {
-                    setTimeout(() => {
-                        if (this.isActive && !this.isPaused && !this._awaitingNextPage) {
-                            this._onPageDone();
-                        }
-                    }, 0);
-                    return;
-                }
+        if (this._skipSentencesOnNextPageTexts.length > 0 && sentences.length > 0) {
+            sentences = this._dropSpokenLookAheadSentences(sentences);
+            if (sentences.length === 0 && this.isActive && !this.isPaused && speak) {
+                setTimeout(() => {
+                    if (this.isActive && !this.isPaused && !this._awaitingNextPage) {
+                        this._onPageDone();
+                    }
+                }, 0);
+                return;
             }
         }
 
@@ -410,7 +405,7 @@ class TtsReader {
         }
 
         const speakSentences = allowLookAhead ?
-            this._mergeNextPageFirstFragment(sentences) :
+            this._mergeNextPageLookAhead(sentences) :
             sentences;
         this.allSentences = speakSentences;
         const serverStartIndex = idx;
@@ -465,7 +460,20 @@ class TtsReader {
         });
     }
 
-    _mergeNextPageFirstFragment(sentences) {
+    _dropSpokenLookAheadSentences(sentences) {
+        const skippedTexts = this._skipSentencesOnNextPageTexts;
+        this._skipSentencesOnNextPageTexts = [];
+
+        let nextSentences = sentences;
+        for (const skippedText of skippedTexts) {
+            if (nextSentences[0]?.text !== skippedText) break;
+            nextSentences = nextSentences.slice(1);
+        }
+
+        return nextSentences;
+    }
+
+    _mergeNextPageLookAhead(sentences) {
         if (!sentences.length) return sentences;
 
         const lastCurrent = sentences[sentences.length - 1];
@@ -473,14 +481,18 @@ class TtsReader {
             return sentences;
         }
 
-        const firstNext = this._extractPageSentences(1)[0];
+        const lookAheadSentences = this._extractPageSentences(1)
+            .slice(0, NEXT_PAGE_LOOKAHEAD_SENTENCE_COUNT);
+        const firstNext = lookAheadSentences[0];
         if (!firstNext) return sentences;
 
-        this._skipFirstSentenceOnNextPageText = firstNext.text;
-        return sentences.slice(0, -1).concat({
+        this._skipSentencesOnNextPageTexts = lookAheadSentences.map(s => s.text);
+        const merged = {
             text: `${lastCurrent.text} ${firstNext.text}`,
             ranges: lastCurrent.ranges.concat(firstNext.ranges)
-        });
+        };
+
+        return sentences.slice(0, -1).concat(merged, lookAheadSentences.slice(1));
     }
 
     _extractPageSentences(pageOffset = 0) {

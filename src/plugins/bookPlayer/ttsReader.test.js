@@ -14,6 +14,13 @@ describe('prepareTextForSentenceSplit', () => {
         expect(prepareTextForSentenceSplit(text))
             .toBe('* 1/5/1735 | 22/5/1819 The admiral');
     });
+
+    it('protects common abbreviation periods from sentence splitting', () => {
+        const text = 'Mr. Smith met Mrs. Jones and Dr. Patel, e.g. after lunch.';
+
+        expect(prepareTextForSentenceSplit(text))
+            .toBe('Mr, Smith met Mrs, Jones and Dr, Patel, e,g, after lunch.');
+    });
 });
 
 describe('normalizeSpeechText', () => {
@@ -36,6 +43,13 @@ describe('normalizeSpeechText', () => {
 
         expect(normalizeSpeechText(text))
             .toBe('May 1, 1735 to May 22, 1819. The admiral');
+    });
+
+    it('expands common abbreviations for smoother speech', () => {
+        const text = 'Mr, Smith met Mrs, Jones, Ms, Ray, and Dr, Patel, e,g, after lunch.';
+
+        expect(normalizeSpeechText(text))
+            .toBe('mister Smith met misiz Jones, miz Ray, and doctor Patel, for example after lunch.');
     });
 });
 

@@ -68,6 +68,35 @@ const LEADING_DATE_MARKER_RE = /(^|\s)\*\s+(?=\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
 const DATE_SPEECH_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
 const SENTENCE_TERMINATOR_RE = /[.!?]["”'’)]*$/;
 const NEXT_PAGE_LOOKAHEAD_SENTENCE_COUNT = 2;
+const LATIN_ABBREVIATION_PERIOD_RE = /\b(?:e\.g|i\.e)\./gi;
+const TITLE_ABBREVIATION_SPEECH = [
+    ['Mr', 'mister'],
+    ['Mrs', 'misiz'],
+    ['Ms', 'miz'],
+    ['Mx', 'mix'],
+    ['Dr', 'doctor'],
+    ['Prof', 'professor'],
+    ['Rev', 'reverend'],
+    ['Fr', 'father'],
+    ['Sr', 'senior'],
+    ['Jr', 'junior'],
+    ['Hon', 'honorable'],
+    ['Gov', 'governor'],
+    ['Sen', 'senator'],
+    ['Rep', 'representative'],
+    ['Pres', 'president'],
+    ['Gen', 'general'],
+    ['Capt', 'captain'],
+    ['Lt', 'lieutenant'],
+    ['Col', 'colonel'],
+    ['Maj', 'major'],
+    ['Sgt', 'sergeant'],
+    ['Adm', 'admiral'],
+    ['Cmdr', 'commander'],
+    ['vs', 'versus'],
+    ['etc', 'etcetera']
+];
+const ABBREVIATION_PERIOD_RE = new RegExp(`\\b(?:${TITLE_ABBREVIATION_SPEECH.map(([abbreviation]) => abbreviation).join('|')})\\.`, 'gi');
 const MONTH_NAMES = [
     'January',
     'February',
@@ -88,18 +117,29 @@ function splitSentences(text) {
 }
 
 export function prepareTextForSentenceSplit(text) {
-    return text.replace(NUMERIC_DATE_RE, '$1/$2/$3');
+    return text
+        .replace(NUMERIC_DATE_RE, '$1/$2/$3')
+        .replace(ABBREVIATION_PERIOD_RE, match => `${match.slice(0, -1)},`)
+        .replace(LATIN_ABBREVIATION_PERIOD_RE, match => match.replace(/\./g, ','));
 }
 
 export function normalizeSpeechText(text) {
-    return text
-        .replace(SECTION_BREAK_RE, '$1... ...Next Chapter Section... ...')
+    let normalized = text
+        .replace(SECTION_BREAK_RE, '$1Next section. ')
         .replace(LEADING_DATE_MARKER_RE, '$1')
         .replace(DATE_RANGE_SEPARATOR_RE, '$1 to $2. ')
         .replace(DATE_SPEECH_RE, (_match, day, month, year) => {
             const monthName = MONTH_NAMES[Number(month) - 1];
             return monthName ? `${monthName} ${Number(day)}, ${year}` : `${day}/${month}/${year}`;
         })
+        .replace(/\be,g,/gi, 'for example')
+        .replace(/\bi,e,/gi, 'that is');
+
+    for (const [abbreviation, speech] of TITLE_ABBREVIATION_SPEECH) {
+        normalized = normalized.replace(new RegExp(`\\b${abbreviation}[.,]`, 'gi'), speech);
+    }
+
+    return normalized
         .replace(/\s+/g, ' ')
         .trim();
 }

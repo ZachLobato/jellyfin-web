@@ -1,4 +1,64 @@
-const TTS_WS_URL = `ws://${window.location.hostname}:7878`;
+const PUBLIC_TTS_WS_URL = 'wss://jfws.thewolfgate.com';
+const LOCAL_TTS_WS_PORT = 7878;
+
+function getJellyfinAccessToken() {
+    return window.ApiClient?.accessToken?.() || '';
+}
+
+function getJellyfinUserId() {
+    return window.ApiClient?.getCurrentUserId?.() || '';
+}
+
+function isPrivateIpv4(hostname) {
+    const parts = hostname.split('.');
+    if (parts.length !== 4) return false;
+
+    const octets = parts.map(part => Number(part));
+    if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+        return false;
+    }
+
+    const [first, second] = octets;
+    return first === 10
+        || (first === 172 && second >= 16 && second <= 31)
+        || (first === 192 && second === 168)
+        || (first === 169 && second === 254)
+        || (first === 100 && second >= 64 && second <= 127);
+}
+
+export function isLocalTtsHost(hostname) {
+    const normalized = hostname.toLowerCase();
+
+    return normalized === 'localhost'
+        || normalized === '127.0.0.1'
+        || normalized === '::1'
+        || normalized.endsWith('.local')
+        || normalized.startsWith('fe80:')
+        || normalized.startsWith('fc')
+        || normalized.startsWith('fd')
+        || isPrivateIpv4(normalized);
+}
+
+export function getTtsWsUrl(
+    location = window.location,
+    accessToken = getJellyfinAccessToken(),
+    userId = getJellyfinUserId()
+) {
+    const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
+    const baseUrl = isLocalTtsHost(location.hostname) ?
+        `ws://${host}:${LOCAL_TTS_WS_PORT}` :
+        PUBLIC_TTS_WS_URL;
+
+    const url = new URL(baseUrl);
+    if (accessToken) {
+        url.searchParams.set('token', accessToken);
+    }
+    if (userId) {
+        url.searchParams.set('userId', userId);
+    }
+
+    return url.toString();
+}
 
 const SENTENCE_RE = /[^.!?]+[.!?]["""'''"]?\s*|[^.!?]+$/g;
 const NUMERIC_DATE_RE = /\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/g;
@@ -222,7 +282,7 @@ class TtsReader {
         this._initialStartIndex = startIndex;
         this.isActive = true;
 
-        this.ws = new WebSocket(TTS_WS_URL);
+        this.ws = new WebSocket(getTtsWsUrl());
         this.ws.onopen = () => this._sendCurrentPage();
         this.ws.onmessage = (e) => this._onMessage(e);
         this.ws.onerror = () => {
@@ -433,7 +493,7 @@ class TtsReader {
             this.ws.close();
             this.ws = null;
         }
-        this.ws = new WebSocket(TTS_WS_URL);
+        this.ws = new WebSocket(getTtsWsUrl());
         this.ws.onopen = () => {
             if (!this.isActive) return;
             this._wsSend({ type: 'speak', sentences: sentences.map(s => s.text), startIndex });

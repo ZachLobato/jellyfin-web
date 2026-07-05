@@ -1,4 +1,5 @@
 import { getLibraryApi } from '@jellyfin/sdk/lib/utils/api/library-api';
+import NoSleep from 'nosleep.js';
 
 import { PluginType } from 'constants/pluginType';
 
@@ -8,6 +9,7 @@ import dialogHelper from '../../components/dialogHelper/dialogHelper';
 import dom from '../../utils/dom';
 import { appRouter } from '../../components/router/appRouter';
 import { ServerConnections } from 'lib/jellyfin-apiclient';
+import globalize from 'lib/globalize';
 import Events from '../../utils/events.ts';
 import * as userSettings from '../../scripts/settings/userSettings';
 
@@ -44,6 +46,10 @@ export class PdfPlayer {
         this.onColorInversionChanged = this.onColorInversionChanged.bind(this);
         this.onPageAdvanceChanged = this.onPageAdvanceChanged.bind(this);
         this.onViewChanged = this.onViewChanged.bind(this);
+        this.onWakeLockChanged = this.onWakeLockChanged.bind(this);
+        this.onVisibilityChange = this.onVisibilityChange.bind(this);
+        this._noSleep = new NoSleep();
+        this.wakeLockEnabled = false;
     }
 
     play(options) {
@@ -63,6 +69,7 @@ export class PdfPlayer {
     }
 
     stop() {
+        this.disableWakeLock();
         this.unbindEvents();
 
         const stopInfo = {
@@ -573,6 +580,40 @@ export class PdfPlayer {
         this.updatePageAdvanceButton();
     }
 
+    async onWakeLockChanged() {
+        if (this.wakeLockEnabled) {
+            this.disableWakeLock();
+            return;
+        }
+
+        try {
+            await this._noSleep.enable();
+            this.wakeLockEnabled = true;
+        } catch (err) {
+            console.error('Could not enable wake lock:', err);
+        }
+
+        this.updateWakeLockButton();
+    }
+
+    async onVisibilityChange() {
+        if (this.wakeLockEnabled && document.visibilityState === 'visible') {
+            try {
+                await this._noSleep.enable();
+            } catch (err) {
+                console.error('Could not re-enable wake lock:', err);
+            }
+        }
+    }
+
+    disableWakeLock() {
+        if (!this.wakeLockEnabled) return;
+
+        this._noSleep.disable();
+        this.wakeLockEnabled = false;
+        this.updateWakeLockButton();
+    }
+
     updateColorInversion() {
         const enabled = this.pdfPlayerSettings.invertColors;
 
@@ -592,6 +633,19 @@ export class PdfPlayer {
         button.classList.toggle('active', enabled);
         button.classList.toggle('hide', this.pdfPlayerSettings.pagesPerView <= 1);
         button.setAttribute('aria-pressed', enabled.toString());
+    }
+
+    updateWakeLockButton() {
+        const button = this.mediaElement?.querySelector('.btnToggleWakeLock');
+        if (!button) return;
+
+        const icon = button.querySelector('span');
+        icon.classList.toggle('bedtime', !this.wakeLockEnabled);
+        icon.classList.toggle('bedtime_off', this.wakeLockEnabled);
+
+        button.title = globalize.translate(this.wakeLockEnabled ? 'ButtonKeepScreenOn' : 'ButtonKeepScreenOff');
+        button.classList.toggle('active', this.wakeLockEnabled);
+        button.setAttribute('aria-pressed', this.wakeLockEnabled.toString());
     }
 
     getPageAdvance() {
@@ -623,6 +677,7 @@ export class PdfPlayer {
         elem.querySelector('.btnToggleColorInversion').addEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnTogglePageAdvance').addEventListener('click', this.onPageAdvanceChanged);
         elem.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
+        elem.querySelector('.btnToggleWakeLock').addEventListener('click', this.onWakeLockChanged);
         elem.querySelector('.pdfNavButtonNext').addEventListener('click', this.onNextButtonClick);
         elem.querySelector('.pdfNavButtonPrevious').addEventListener('click', this.onPreviousButtonClick);
 
@@ -642,6 +697,7 @@ export class PdfPlayer {
         document.addEventListener('keyup', this.onWindowKeyUp);
         document.addEventListener('mousemove', this.onMouseMove);
         document.addEventListener('mouseup', this.onMouseUp);
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
 
     unbindMediaElementEvents() {
@@ -652,6 +708,7 @@ export class PdfPlayer {
         elem.querySelector('.btnToggleColorInversion').removeEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnTogglePageAdvance').removeEventListener('click', this.onPageAdvanceChanged);
         elem.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
+        elem.querySelector('.btnToggleWakeLock').removeEventListener('click', this.onWakeLockChanged);
         elem.querySelector('.pdfNavButtonNext').removeEventListener('click', this.onNextButtonClick);
         elem.querySelector('.pdfNavButtonPrevious').removeEventListener('click', this.onPreviousButtonClick);
 
@@ -673,6 +730,7 @@ export class PdfPlayer {
         document.removeEventListener('keyup', this.onWindowKeyUp);
         document.removeEventListener('mousemove', this.onMouseMove);
         document.removeEventListener('mouseup', this.onMouseUp);
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
     }
 
     createMediaElement() {
@@ -702,6 +760,7 @@ export class PdfPlayer {
             html += '<button is="paper-icon-button-light" class="autoSize btnToggleColorInversion" tabindex="-1"><span class="material-icons actionButtonIcon invert_colors" aria-hidden="true"></span></button>';
             html += '<button is="paper-icon-button-light" class="autoSize btnTogglePageAdvance" tabindex="-1"><span class="material-icons actionButtonIcon looks_one" aria-hidden="true"></span></button>';
             html += `<button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1"><span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span></button>`;
+            html += '<button is="paper-icon-button-light" class="autoSize btnToggleWakeLock" tabindex="-1"><span class="material-icons actionButtonIcon bedtime" aria-hidden="true"></span></button>';
             html += '<button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1"><span class="material-icons actionButtonIcon close" aria-hidden="true"></span></button>';
             html += '</div>';
 
@@ -717,6 +776,7 @@ export class PdfPlayer {
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
         this.updatePageAdvanceButton();
         this.updateColorInversion();
+        this.updateWakeLockButton();
 
         return elem;
     }

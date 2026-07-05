@@ -1,14 +1,17 @@
 import { getLibraryApi } from '@jellyfin/sdk/lib/utils/api/library-api';
 import { Archive } from 'libarchive.js';
+import NoSleep from 'nosleep.js';
 
 import { PluginType } from 'constants/pluginType';
 import { ServerConnections } from 'lib/jellyfin-apiclient';
+import globalize from 'lib/globalize';
 
 import loading from '../../components/loading/loading';
 import dialogHelper from '../../components/dialogHelper/dialogHelper';
 import keyboardnavigation from '../../scripts/keyboardNavigation';
 import { appRouter } from '../../components/router/appRouter';
 import * as userSettings from '../../scripts/settings/userSettings';
+import Events from '../../utils/events.ts';
 
 import './style.scss';
 
@@ -28,6 +31,10 @@ export class ComicsPlayer {
         this.onDialogClosed = this.onDialogClosed.bind(this);
         this.onWindowKeyDown = this.onWindowKeyDown.bind(this);
         this.onPageAdvanceChanged = this.onPageAdvanceChanged.bind(this);
+        this.onWakeLockChanged = this.onWakeLockChanged.bind(this);
+        this.onVisibilityChange = this.onVisibilityChange.bind(this);
+        this._noSleep = new NoSleep();
+        this.wakeLockEnabled = false;
     }
 
     play(options) {
@@ -42,6 +49,7 @@ export class ComicsPlayer {
     }
 
     stop() {
+        this.disableWakeLock();
         this.unbindEvents();
 
         const stopInfo = {
@@ -149,8 +157,55 @@ export class ComicsPlayer {
         this.changePageAdvance();
     }
 
+    async onWakeLockChanged() {
+        if (this.wakeLockEnabled) {
+            this.disableWakeLock();
+            return;
+        }
+
+        try {
+            await this._noSleep.enable();
+            this.wakeLockEnabled = true;
+        } catch (err) {
+            console.error('Could not enable wake lock:', err);
+        }
+
+        this.updateWakeLockButton();
+    }
+
+    async onVisibilityChange() {
+        if (this.wakeLockEnabled && document.visibilityState === 'visible') {
+            try {
+                await this._noSleep.enable();
+            } catch (err) {
+                console.error('Could not re-enable wake lock:', err);
+            }
+        }
+    }
+
+    disableWakeLock() {
+        if (!this.wakeLockEnabled) return;
+
+        this._noSleep.disable();
+        this.wakeLockEnabled = false;
+        this.updateWakeLockButton();
+    }
+
     getPageAdvance() {
         return this.comicsPlayerSettings.advanceOnePage && this.comicsPlayerSettings.pagesPerView > 1 ? 1 : this.comicsPlayerSettings.pagesPerView;
+    }
+
+    updateWakeLockButton() {
+        const button = this.mediaElement?.querySelector('.btnToggleWakeLock');
+        if (!button) return;
+
+        const icon = button.querySelector('span');
+        icon.classList.toggle('bedtime', !this.wakeLockEnabled);
+        icon.classList.toggle('bedtime_off', this.wakeLockEnabled);
+
+        button.title = globalize.translate(this.wakeLockEnabled ? 'ButtonKeepScreenOn' : 'ButtonKeepScreenOff');
+        button.classList.toggle('active', this.wakeLockEnabled);
+        button.setAttribute('aria-pressed', this.wakeLockEnabled.toString());
     }
 
     updatePageAdvanceButton() {
@@ -225,12 +280,14 @@ export class ComicsPlayer {
         elem?.querySelector('.btnToggleLangDir').addEventListener('click', this.onDirChanged);
         elem?.querySelector('.btnTogglePageAdvance').addEventListener('click', this.onPageAdvanceChanged);
         elem?.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
+        elem?.querySelector('.btnToggleWakeLock').addEventListener('click', this.onWakeLockChanged);
     }
 
     bindEvents() {
         this.bindMediaElementEvents();
 
         document.addEventListener('keydown', this.onWindowKeyDown);
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
 
     unbindMediaElementEvents() {
@@ -241,12 +298,14 @@ export class ComicsPlayer {
         elem?.querySelector('.btnToggleLangDir').removeEventListener('click', this.onDirChanged);
         elem?.querySelector('.btnTogglePageAdvance').removeEventListener('click', this.onPageAdvanceChanged);
         elem?.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
+        elem?.querySelector('.btnToggleWakeLock').removeEventListener('click', this.onWakeLockChanged);
     }
 
     unbindEvents() {
         this.unbindMediaElementEvents();
 
         document.removeEventListener('keydown', this.onWindowKeyDown);
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
     }
 
     createMediaElement() {
@@ -287,6 +346,9 @@ export class ComicsPlayer {
                                 <button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1">
                                     <span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span>
                                 </button>
+                                <button is="paper-icon-button-light" class="autoSize btnToggleWakeLock" tabindex="-1">
+                                    <span class="material-icons actionButtonIcon bedtime" aria-hidden="true"></span>
+                                </button>
                                 <button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1">
                                     <span class="material-icons actionButtonIcon close" aria-hidden="true"></span>
                                 </button>
@@ -303,6 +365,7 @@ export class ComicsPlayer {
         const viewTitle = this.comicsPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
         this.updatePageAdvanceButton();
+        this.updateWakeLockButton();
 
         this.bindEvents();
         return elem;

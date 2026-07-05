@@ -81,7 +81,8 @@
     }
 
     .btnToggleColorInversion.active .actionButtonIcon,
-    .btnTogglePageAdvance.active .actionButtonIcon {
+    .btnTogglePageAdvance.active .actionButtonIcon,
+    .btnToggleWakeLock.active .actionButtonIcon {
         opacity: 1;
     }
 }

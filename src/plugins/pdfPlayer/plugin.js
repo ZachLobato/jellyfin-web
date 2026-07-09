@@ -1,4 +1,5 @@
 import { getLibraryApi } from '@jellyfin/sdk/lib/utils/api/library-api';
+import escapeHTML from 'escape-html';
 import NoSleep from 'nosleep.js';
 
 import { PluginType } from 'constants/pluginType';
@@ -45,6 +46,9 @@ export class PdfPlayer {
         this.onPreviousButtonClick = this.onPreviousButtonClick.bind(this);
         this.onColorInversionChanged = this.onColorInversionChanged.bind(this);
         this.onPageAdvanceChanged = this.onPageAdvanceChanged.bind(this);
+        this.onTocButtonClick = this.onTocButtonClick.bind(this);
+        this.onTocDialogClosed = this.onTocDialogClosed.bind(this);
+        this.onTocLinkClick = this.onTocLinkClick.bind(this);
         this.onViewChanged = this.onViewChanged.bind(this);
         this.onWakeLockChanged = this.onWakeLockChanged.bind(this);
         this.onVisibilityChange = this.onVisibilityChange.bind(this);
@@ -57,6 +61,9 @@ export class PdfPlayer {
         this.loaded = false;
         this.cancellationToken = false;
         this.pages = {};
+        this.outline = null;
+        this.outlinePageNumberCache = new WeakMap();
+        this.tocElement = null;
         this.resetZoomState();
 
         const mediaSourceId = options.items[0].Id;
@@ -70,6 +77,7 @@ export class PdfPlayer {
 
     stop() {
         this.disableWakeLock();
+        this.destroyTocDialog();
         this.unbindEvents();
 
         const stopInfo = {
@@ -156,7 +164,11 @@ export class PdfPlayer {
                 break;
             case 'Escape':
                 e.preventDefault();
-                this.stop();
+                if (this.tocElement) {
+                    this.destroyTocDialog();
+                } else {
+                    this.stop();
+                }
                 break;
         }
     }
@@ -580,6 +592,33 @@ export class PdfPlayer {
         this.updatePageAdvanceButton();
     }
 
+    onTocButtonClick(e) {
+        e.preventDefault();
+        this.openTocDialog();
+    }
+
+    onTocDialogClosed(e) {
+        this.destroyTocDialog(e?.type === 'click');
+    }
+
+    async onTocLinkClick(e) {
+        const link = e.target.closest('a[data-outline-path]');
+        if (!link) return;
+
+        e.preventDefault();
+
+        const outlineItem = this.getOutlineItemByPath(link.getAttribute('data-outline-path'));
+        const pageNumber = await this.getOutlineItemPageNumber(outlineItem);
+
+        if (!pageNumber || this.cancellationToken) return;
+
+        this.loadPage(pageNumber);
+        this.progress = pageNumber - 1;
+        this.destroyTocDialog();
+
+        Events.trigger(this, 'pause');
+    }
+
     async onWakeLockChanged() {
         if (this.wakeLockEnabled) {
             this.disableWakeLock();
@@ -635,6 +674,13 @@ export class PdfPlayer {
         button.setAttribute('aria-pressed', enabled.toString());
     }
 
+    updateTocButton() {
+        const button = this.mediaElement?.querySelector('.btnPdfToc');
+        if (!button) return;
+
+        button.classList.toggle('hide', !this.outline?.length);
+    }
+
     updateWakeLockButton() {
         const button = this.mediaElement?.querySelector('.btnToggleWakeLock');
         if (!button) return;
@@ -676,6 +722,7 @@ export class PdfPlayer {
         elem.querySelector('.btnExit').addEventListener('click', this.onDialogClosed, { once: true });
         elem.querySelector('.btnToggleColorInversion').addEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnTogglePageAdvance').addEventListener('click', this.onPageAdvanceChanged);
+        elem.querySelector('.btnPdfToc').addEventListener('click', this.onTocButtonClick);
         elem.querySelector('.btnToggleView').addEventListener('click', this.onViewChanged);
         elem.querySelector('.btnToggleWakeLock').addEventListener('click', this.onWakeLockChanged);
         elem.querySelector('.pdfNavButtonNext').addEventListener('click', this.onNextButtonClick);
@@ -707,6 +754,7 @@ export class PdfPlayer {
         elem.querySelector('.btnExit').removeEventListener('click', this.onDialogClosed);
         elem.querySelector('.btnToggleColorInversion').removeEventListener('click', this.onColorInversionChanged);
         elem.querySelector('.btnTogglePageAdvance').removeEventListener('click', this.onPageAdvanceChanged);
+        elem.querySelector('.btnPdfToc').removeEventListener('click', this.onTocButtonClick);
         elem.querySelector('.btnToggleView').removeEventListener('click', this.onViewChanged);
         elem.querySelector('.btnToggleWakeLock').removeEventListener('click', this.onWakeLockChanged);
         elem.querySelector('.pdfNavButtonNext').removeEventListener('click', this.onNextButtonClick);
@@ -759,6 +807,7 @@ export class PdfPlayer {
             html += '<div class="actionButtons">';
             html += '<button is="paper-icon-button-light" class="autoSize btnToggleColorInversion" tabindex="-1"><span class="material-icons actionButtonIcon invert_colors" aria-hidden="true"></span></button>';
             html += '<button is="paper-icon-button-light" class="autoSize btnTogglePageAdvance" tabindex="-1"><span class="material-icons actionButtonIcon looks_one" aria-hidden="true"></span></button>';
+            html += `<button is="paper-icon-button-light" class="autoSize btnPdfToc hide" tabindex="-1" title="${escapeHTML(globalize.translate('TableOfContents'))}"><span class="material-icons actionButtonIcon toc" aria-hidden="true"></span></button>`;
             html += `<button is="paper-icon-button-light" class="autoSize btnToggleView" tabindex="-1"><span class="material-icons actionButtonIcon ${viewIcon}" aria-hidden="true"></span></button>`;
             html += '<button is="paper-icon-button-light" class="autoSize btnToggleWakeLock" tabindex="-1"><span class="material-icons actionButtonIcon bedtime" aria-hidden="true"></span></button>';
             html += '<button is="paper-icon-button-light" class="autoSize btnExit" tabindex="-1"><span class="material-icons actionButtonIcon close" aria-hidden="true"></span></button>';
@@ -775,10 +824,138 @@ export class PdfPlayer {
         const viewTitle = this.pdfPlayerSettings.pagesPerView === 1 ? 'Double Page View' : 'Single Page View';
         this.mediaElement.querySelector('.btnToggleView').title = viewTitle;
         this.updatePageAdvanceButton();
+        this.updateTocButton();
         this.updateColorInversion();
         this.updateWakeLockButton();
 
         return elem;
+    }
+
+    bindTocDialogEvents(elem) {
+        elem.addEventListener('close', this.onTocDialogClosed, { once: true });
+        elem.querySelector('.btnPdfTocClose').addEventListener('click', this.onTocDialogClosed, { once: true });
+        elem.querySelector('.pdfToc').addEventListener('click', this.onTocLinkClick);
+    }
+
+    unbindTocDialogEvents(elem) {
+        elem.removeEventListener('close', this.onTocDialogClosed);
+        elem.querySelector('.btnPdfTocClose').removeEventListener('click', this.onTocDialogClosed);
+        elem.querySelector('.pdfToc').removeEventListener('click', this.onTocLinkClick);
+    }
+
+    destroyTocDialog(closeDialog = true) {
+        const elem = this.tocElement;
+        if (!elem) return;
+
+        this.unbindTocDialogEvents(elem);
+        this.tocElement = null;
+
+        if (closeDialog) {
+            dialogHelper.close(elem);
+        }
+    }
+
+    getOutlineItemByPath(path) {
+        let items = this.outline;
+        let item = null;
+
+        for (const index of path.split('.')) {
+            item = Array.isArray(items) ? items[parseInt(index, 10)] : null;
+            items = item?.items;
+        }
+
+        return item;
+    }
+
+    getOutlineItemHtml(item, path) {
+        const title = escapeHTML(item.title || globalize.translate('TableOfContents'));
+        let html = '<li>';
+
+        if (item.dest) {
+            html += `<a href="#" data-outline-path="${escapeHTML(path)}">${title}</a>`;
+        } else {
+            html += `<span>${title}</span>`;
+        }
+
+        if (item.items?.length) {
+            html += '<ul>';
+            html += item.items.map((child, index) => this.getOutlineItemHtml(child, `${path}.${index}`)).join('');
+            html += '</ul>';
+        }
+
+        html += '</li>';
+        return html;
+    }
+
+    openTocDialog() {
+        if (!this.outline?.length) return;
+
+        if (this.tocElement) {
+            return;
+        }
+
+        const elem = dialogHelper.createDialog({
+            size: 'small',
+            autoFocus: false,
+            removeOnClose: true
+        });
+
+        elem.id = 'dialogPdfToc';
+
+        let html = '<div class="topRightActionButtons">';
+        html += '<button is="paper-icon-button-light" class="autoSize btnPdfTocClose hide-mouse-idle-tv" tabindex="-1"><span class="material-icons pdfTocButtonIcon close" aria-hidden="true"></span></button>';
+        html += '</div>';
+        html += `<h2 class="pdfTocHeader">${escapeHTML(globalize.translate('TableOfContents'))}</h2>`;
+        html += '<ul class="pdfToc">';
+        html += this.outline.map((item, index) => this.getOutlineItemHtml(item, index.toString())).join('');
+        html += '</ul>';
+
+        elem.innerHTML = html;
+        this.tocElement = elem;
+
+        this.bindTocDialogEvents(elem);
+        dialogHelper.open(elem);
+    }
+
+    async getOutlineItemPageNumber(item) {
+        if (!item?.dest) return null;
+
+        if (this.outlinePageNumberCache.has(item)) {
+            return this.outlinePageNumberCache.get(item);
+        }
+
+        let destination = item.dest;
+
+        if (typeof destination === 'string') {
+            destination = await this.book.getDestination(destination);
+        }
+
+        if (!Array.isArray(destination) || !destination.length) {
+            return null;
+        }
+
+        const pageReference = destination[0];
+        const pageIndex = typeof pageReference === 'number' ?
+            pageReference :
+            await this.book.getPageIndex(pageReference);
+        const pageNumber = Math.min(Math.max(pageIndex + 1, 1), this.duration());
+
+        this.outlinePageNumberCache.set(item, pageNumber);
+
+        return pageNumber;
+    }
+
+    loadOutline() {
+        return this.book.getOutline().then(outline => {
+            if (this.cancellationToken) return;
+
+            this.outline = outline || [];
+            this.updateTocButton();
+        }).catch(err => {
+            console.error('[PdfPlayer] failed to load PDF outline', err);
+            this.outline = [];
+            this.updateTocButton();
+        });
     }
 
     setCurrentSrc(elem, options) {
@@ -816,6 +993,7 @@ export class PdfPlayer {
                 if (this.cancellationToken) return;
                 this.book = book;
                 this.loaded = true;
+                this.loadOutline();
 
                 const percentageTicks = options.startPositionTicks / 10000;
                 if (percentageTicks !== 0) {

@@ -88,3 +88,62 @@
         opacity: 1;
     }
 }
+
+#dialogPdfToc {
+    background-color: var(--jf-palette-background-default, #fff);
+    color: var(--jf-palette-text-primary, #000);
+    height: fit-content;
+    max-height: 80%;
+    max-width: 60%;
+    overflow: auto;
+    width: fit-content;
+
+    .pdfTocButtonIcon {
+        color: var(--jf-palette-text-primary, #000);
+    }
+
+    .pdfTocHeader {
+        font-size: 1.4rem;
+        font-weight: 500;
+        margin: 1.5rem 3rem 0 1.5rem;
+    }
+
+    .pdfToc {
+        margin: 0;
+        padding: 1.5rem;
+    }
+
+    .pdfToc li {
+        font-size: 1.1rem;
+        font-weight: 500;
+        list-style-type: none;
+        margin-bottom: 0.5rem;
+
+        ul {
+            padding-left: 1.5rem;
+
+            li {
+                font-weight: 400;
+            }
+        }
+
+        a,
+        span {
+            color: var(--jf-palette-text-secondary, #000);
+            text-decoration: none;
+        }
+
+        a:active,
+        a:hover {
+            color: var(--jf-palette-primary-main, #00a4dc);
+            text-decoration: none;
+        }
+    }
+}
+
+@media (max-width: 60em) {
+    #dialogPdfToc {
+        max-height: 100%;
+        max-width: 100%;
+    }
+}

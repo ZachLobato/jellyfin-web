@@ -1,5 +1,11 @@
 import layoutManager from 'components/layoutManager';
 import { DEFAULT_SECTIONS, HomeSectionType } from 'constants/homeSectionType';
+import {
+    getCustomizedHomeSections,
+    getHomeSectionOptions,
+    shouldCombineContinueSections,
+    shouldHideHomeSection
+} from 'customizations/homeSections';
 import { getUserViewsQuery } from 'hooks/api/useUserViews';
 import globalize from 'lib/globalize';
 import ServerConnections from 'lib/jellyfin-apiclient/ServerConnections';
@@ -12,7 +18,7 @@ import { loadLibraryTiles } from './sections/libraryTiles';
 import { loadLiveTV } from './sections/liveTv';
 import { loadNextUp } from './sections/nextUp';
 import { loadRecentlyAdded } from './sections/recentlyAdded';
-import { loadResume } from './sections/resume';
+import { loadCombinedResume, loadResume } from './sections/resume';
 
 import 'elements/emby-button/paper-icon-button-light';
 import 'elements/emby-itemscontainer/emby-itemscontainer';
@@ -74,7 +80,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
                 elem.innerHTML = html;
                 elem.classList.add('homeSectionsContainer');
 
-                const promises = getAllSectionsToShow(userSettings)
+                const promises = getCustomizedHomeSections(getAllSectionsToShow(userSettings))
                     .map((section, index) => (
                         loadSection(elem, apiClient, user, userSettings, userViews, section, index)
                     ));
@@ -140,7 +146,12 @@ export function resume(elem, options) {
 
 function loadSection(page, apiClient, user, userSettings, userViews, section, index) {
     const elem = page.querySelector('.section' + index);
-    const options = { enableOverflow: enableScrollX() };
+    if (shouldHideHomeSection(section)) {
+        elem.innerHTML = '';
+        return Promise.resolve();
+    }
+
+    const options = getHomeSectionOptions(section);
 
     switch (section) {
         case HomeSectionType.ActiveRecordings:
@@ -158,7 +169,11 @@ function loadSection(page, apiClient, user, userSettings, userViews, section, in
             loadNextUp(elem, apiClient, userSettings, options);
             break;
         case HomeSectionType.Resume:
-            loadResume(elem, apiClient, 'HeaderContinueWatching', 'Video', userSettings, options);
+            if (shouldCombineContinueSections()) {
+                loadCombinedResume(elem, apiClient, userSettings, options);
+            } else {
+                loadResume(elem, apiClient, 'HeaderContinueWatching', 'Video', userSettings, options);
+            }
             break;
         case HomeSectionType.ResumeAudio:
             loadResume(elem, apiClient, 'HeaderContinueListening', 'Audio', userSettings, options);
@@ -174,10 +189,6 @@ function loadSection(page, apiClient, user, userSettings, userViews, section, in
     }
 
     return Promise.resolve();
-}
-
-function enableScrollX() {
-    return true;
 }
 
 export default {

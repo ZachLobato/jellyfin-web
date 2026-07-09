@@ -20,3 +20,65 @@
     text-overflow: ellipsis;
     overflow: hidden;
 }
+
+.combinedResumeItems > .overflowPortraitCard {
+    width: 30vw;
+}
+
+@media (min-width: 25em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 23.4vw;
+    }
+}
+
+@media (min-width: 43.75em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 17.325vw;
+    }
+}
+
+@media (orientation: landscape) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 17.325vw;
+    }
+}
+
+@media (min-width: 50em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 13.875vw;
+    }
+}
+
+@media (min-width: 75em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 11.625vw;
+    }
+}
+
+@media (min-width: 87.5em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 9.975vw;
+    }
+}
+
+@media (min-width: 100em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 8.7vw;
+    }
+}
+
+@media (min-width: 120em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 7.8075vw;
+    }
+}
+
+@media (min-width: 131.25em) {
+    .combinedResumeItems > .overflowPortraitCard {
+        width: 6.975vw;
+    }
+}
+
+.itemsContainer-tv.combinedResumeItems > .overflowPortraitCard {
+    width: 11.7vw;
+}

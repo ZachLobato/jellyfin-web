@@ -386,6 +386,17 @@ button::-moz-focus-inner {
     font-weight: bold;
 }
 
+.cardImageContainer > .cardImageTitle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 1;
+    width: calc(100% - 1em);
+    color: #fff;
+    text-shadow: 0 0.0725em 0.29em rgba(0, 0, 0, 0.9);
+    transform: translate(-50%, -50%);
+}
+
 .cardImageIcon {
     font-size: 5em;
     color: inherit;

@@ -920,6 +920,13 @@ function buildCard(index, item, apiClient, options) {
         }
     }
 
+    if (imgUrl && options.showImageTitle) {
+        cardImageContainerOpen += getDefaultText(item, {
+            ...options,
+            preferDefaultText: true
+        });
+    }
+
     if (!imgUrl) {
         cardImageContainerOpen += getDefaultText(item, options);
     }
@@ -1034,12 +1041,14 @@ function getHoverMenuHtml(item, action) {
 export function getDefaultText(item, options) {
     let icon;
 
-    if (item.Type === BaseItemKind.CollectionFolder || item.CollectionType) {
-        icon = getLibraryIcon(item.CollectionType);
-    }
+    if (!options?.preferDefaultText) {
+        if (item.Type === BaseItemKind.CollectionFolder || item.CollectionType) {
+            icon = getLibraryIcon(item.CollectionType);
+        }
 
-    if (!icon) {
-        icon = getItemTypeIcon(item.Type, options?.defaultCardImageIcon);
+        if (!icon) {
+            icon = getItemTypeIcon(item.Type, options?.defaultCardImageIcon);
+        }
     }
 
     if (icon) {
@@ -1047,7 +1056,8 @@ export function getDefaultText(item, options) {
     }
 
     const defaultName = isUsingLiveTvNaming(item.Type) ? item.Name : itemHelper.getDisplayName(item);
-    return '<div class="cardText cardDefaultText">' + escapeHtml(defaultName) + '</div>';
+    const titleClass = options?.showImageTitle ? ' cardImageTitle' : '';
+    return '<div class="cardText cardDefaultText' + titleClass + '">' + escapeHtml(defaultName) + '</div>';
 }
 
 /**

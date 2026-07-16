@@ -6,6 +6,8 @@ import { appRouter } from 'components/router/appRouter';
 import globalize from 'lib/globalize';
 import imageHelper from 'utils/image';
 
+import { getLibraryDisplayName } from './libraryDisplayName';
+
 function getLibraryButtonsHtml(items: BaseItemDto[]) {
     let html = '';
 
@@ -18,7 +20,7 @@ function getLibraryButtonsHtml(items: BaseItemDto[]) {
     for (let i = 0, length = items.length; i < length; i++) {
         const item = items[i];
         const icon = imageHelper.getLibraryIcon(item.CollectionType);
-        html += '<a is="emby-linkbutton" href="' + appRouter.getRouteUrl(item) + '" class="raised homeLibraryButton"><span class="material-icons homeLibraryIcon ' + icon + '" aria-hidden="true"></span><span class="homeLibraryText">' + escapeHtml(item.Name) + '</span></a>';
+        html += '<a is="emby-linkbutton" href="' + appRouter.getRouteUrl(item) + '" class="raised homeLibraryButton"><span class="material-icons homeLibraryIcon ' + icon + '" aria-hidden="true"></span><span class="homeLibraryText">' + escapeHtml(getLibraryDisplayName(item)) + '</span></a>';
     }
 
     html += '</div>';

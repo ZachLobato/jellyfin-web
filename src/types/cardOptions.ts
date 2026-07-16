@@ -39,6 +39,7 @@ export interface CardOptions {
     showAirDateTime?: boolean;
     showChannelName?: boolean;
     showTitle?: boolean | string;
+    showImageTitle?: boolean;
     showYear?: boolean | string;
     showDetailsMenu?: boolean;
     missingIndicator?: boolean;

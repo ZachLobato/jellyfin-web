@@ -6,6 +6,7 @@ import imageLoader from 'components/images/imageLoader';
 import globalize from 'lib/globalize';
 
 import type { SectionOptions } from './section';
+import { withLibraryDisplayNames } from './libraryDisplayName';
 
 export function loadLibraryTiles(
     elem: HTMLElement,
@@ -25,9 +26,10 @@ export function loadLibraryTiles(
         }
 
         html += cardBuilder.getCardsHtml({
-            items: userViews,
+            items: withLibraryDisplayNames(userViews),
             shape: getBackdropShape(enableOverflow),
             showTitle: true,
+            showImageTitle: true,
             centerText: true,
             overlayText: false,
             lazy: true,

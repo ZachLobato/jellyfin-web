@@ -1,3 +1,12 @@
+.bookOsdTitle {
+    font-size: 1.1rem;
+    margin-left: 0.35rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .bookOsd {
     position: absolute;
     inset: 0;
@@ -5,6 +14,14 @@
     display: flex;
     justify-content: space-between;
     flex-direction: column;
+
+    .emby-button,
+    .bookOsdTitle {
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.95),
+            0 1px 4px rgba(0, 0, 0, 0.8),
+            0 0 8px rgba(0, 0, 0, 0.5);
+    }
 }
 
 .bookOsdBottomGroup {
@@ -14,8 +31,15 @@
 
 .bookOsdTtsControls {
     @keyframes tts-fadein {
-        from { opacity: 0; transform: translateY(4px); }
-        to   { opacity: 1; transform: translateY(0); }
+        from {
+            opacity: 0;
+            transform: translateY(4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
 
     animation: tts-fadein 0.2s ease;
@@ -47,16 +71,6 @@
     height: 5vh;
     padding: 0 0.8vw;
     background-color: var(--jf-palette-AppBar-defaultBg);
-}
-
-.bookOsd {
-    .emby-button,
-    .bookOsdTitle {
-        text-shadow:
-            0 0 3px rgba(0, 0, 0, 0.95),
-            0 1px 4px rgba(0, 0, 0, 0.8),
-            0 0 8px rgba(0, 0, 0, 0.5);
-    }
 }
 
 // TODO disable landscape on mobile devices
@@ -96,13 +110,4 @@
     margin-left: 0.5rem;
     white-space: nowrap;
     flex-shrink: 0;
-}
-
-.bookOsdTitle {
-    font-size: 1.1rem;
-    margin-left: 0.35rem;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }

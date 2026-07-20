@@ -60,7 +60,8 @@ export function getTtsWsUrl(
     return url.toString();
 }
 
-const SENTENCE_RE = /[^.!?]+[.!?]["""'''"]?\s*|[^.!?]+$/g;
+const SENTENCE_TERMINATORS = '.!?';
+const SENTENCE_CLOSING_MARKS = '"\u201d\'\u2019)';
 const NUMERIC_DATE_RE = /\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/g;
 const SECTION_BREAK_RE = /(^|\s)(?:(?:\*\s*){3,}|(?:[-–—]\s*){3,})(?=\s|$)/g;
 const DATE_RANGE_SEPARATOR_RE = /(\b\d{1,2}\/\d{1,2}\/\d{2,4})\s*[|–—-]\s*(\d{1,2}\/\d{1,2}\/\d{2,4}\b)/g;
@@ -112,10 +113,6 @@ const MONTH_NAMES = [
     'December'
 ];
 
-function splitSentences(text) {
-    return (text.match(SENTENCE_RE) || []).map(s => s.trim()).filter(Boolean);
-}
-
 export function prepareTextForSentenceSplit(text) {
     return text
         .replace(NUMERIC_DATE_RE, '$1/$2/$3')
@@ -163,7 +160,11 @@ class BrowserAudioQueue {
         this._buffers.clear();
         this._nextIndex = startIndex;
         if (this._currentSource) {
-            try { this._currentSource.stop(); } catch (_) {}
+            try {
+                this._currentSource.stop();
+            } catch {
+                // The source may already have stopped.
+            }
             this._currentSource = null;
         }
         this._playing = false;
@@ -218,12 +219,16 @@ class BrowserAudioQueue {
         this._buffers.clear();
         this._nextIndex = 0;
         if (this._currentSource) {
-            try { this._currentSource.stop(); } catch (_) {}
+            try {
+                this._currentSource.stop();
+            } catch {
+                // The source may already have stopped.
+            }
             this._currentSource = null;
         }
         this._playing = false;
         if (this._ctx) {
-            this._ctx.close().catch(() => {});
+            this._ctx.close().catch(() => undefined);
             this._ctx = null;
         }
     }
@@ -638,14 +643,38 @@ class TtsReader {
         fullText = prepareTextForSentenceSplit(fullText);
 
         const rawSentences = [];
-        let match;
-        const re = new RegExp(SENTENCE_RE.source, 'g');
-        while ((match = re.exec(fullText)) !== null) {
-            const text = normalizeSpeechText(match[0]);
-            if (!text) continue;
-            const sentStart = match.index;
-            const sentEnd = sentStart + match[0].length;
-            rawSentences.push({ text, sentStart, sentEnd });
+        let sentenceEnd = 0;
+        for (let index = 0; index < fullText.length; index++) {
+            if (!SENTENCE_TERMINATORS.includes(fullText[index])) {
+                continue;
+            }
+
+            let nextSentenceStart = index + 1;
+            if (SENTENCE_CLOSING_MARKS.includes(fullText[nextSentenceStart])) {
+                nextSentenceStart++;
+            }
+            while (/\s/.test(fullText[nextSentenceStart])) {
+                nextSentenceStart++;
+            }
+
+            const text = normalizeSpeechText(fullText.slice(sentenceEnd, nextSentenceStart));
+            if (text) {
+                rawSentences.push({
+                    text,
+                    sentStart: sentenceEnd,
+                    sentEnd: nextSentenceStart
+                });
+            }
+            sentenceEnd = nextSentenceStart;
+        }
+
+        const trailingText = normalizeSpeechText(fullText.slice(sentenceEnd));
+        if (trailingText) {
+            rawSentences.push({
+                text: trailingText,
+                sentStart: sentenceEnd,
+                sentEnd: fullText.length
+            });
         }
 
         const result = rawSentences.map(s => ({
@@ -661,7 +690,9 @@ class TtsReader {
                 if (range?.getBoundingClientRect().left < scrollX) {
                     result.shift();
                 }
-            } catch {}
+            } catch {
+                // Ignore ranges that are no longer attached to the document.
+            }
         }
 
         return result;

@@ -2375,16 +2375,49 @@ export class PlaybackManager {
                         loading.show();
                     }
                 })
-                .then(() => detectBitrate(item, mediaType))
-                .then((bitrate) => {
-                    return playAfterBitrateDetect(bitrate, item, playOptions, onPlaybackStartedFn, prevSource)
-                        .catch(onPlaybackRejection);
+                .then(() => {
+                    const preloadedStreamInfo = self._currentPlayer?.getPreloadedOptions?.(item);
+                    if (preloadedStreamInfo) {
+                        console.debug('[gapless] using pre-resolved audio stream');
+                        return playPreloadedStream(item, playOptions, onPlaybackStartedFn, preloadedStreamInfo);
+                    }
+
+                    return detectBitrate(item, mediaType).then((bitrate) => {
+                        return playAfterBitrateDetect(bitrate, item, playOptions, onPlaybackStartedFn, prevSource);
+                    });
                 })
+                .catch(onPlaybackRejection)
                 .catch(() => {
                     if (playOptions.fullscreen) {
                         loading.hide();
                     }
                 });
+        }
+
+        function playPreloadedStream(item, playOptions, onPlaybackStartedFn, streamInfo) {
+            const player = getPlayer(item, playOptions);
+            const activePlayer = self._currentPlayer;
+            let promise = Promise.resolve();
+
+            if (activePlayer) {
+                self._playNextAfterEnded = false;
+                promise = onPlaybackChanging(activePlayer, player, item);
+            }
+
+            return promise.then(() => {
+                streamInfo.aspectRatio = playOptions.aspectRatio;
+                streamInfo.fullscreen = playOptions.fullscreen;
+
+                const playerData = getPlayerData(player);
+                playerData.isChangingStream = false;
+                playerData.streamInfo = streamInfo;
+
+                return player.play(streamInfo).then(() => {
+                    loading.hide();
+                    onPlaybackStartedFn();
+                    onPlaybackStarted(player, playOptions, streamInfo, streamInfo.mediaSource);
+                });
+            });
         }
 
         function cancelPlayback() {
@@ -3266,6 +3299,43 @@ export class PlaybackManager {
             }
         }
 
+        function preloadNextAudioTrack(player, currentItem) {
+            if (!player.preload || currentItem.MediaType !== MediaType.Audio) {
+                return;
+            }
+
+            const nextItemInfo = self._playQueueManager.getNextItemInfo();
+            if (!nextItemInfo?.item || nextItemInfo.item.MediaType !== MediaType.Audio) {
+                player.clearPreload?.();
+                return;
+            }
+
+            const nextItem = nextItemInfo.item;
+            const playOptions = nextItem.playOptions || getDefaultPlayOptions();
+
+            self.getPlaybackInfo(nextItem, {
+                mediaSourceId: playOptions.mediaSourceId,
+                audioStreamIndex: playOptions.audioStreamIndex,
+                startPositionTicks: 0
+            }).then((streamInfo) => {
+                const current = self._playQueueManager.getCurrentItem();
+                const next = self._playQueueManager.getNextItemInfo()?.item;
+
+                // The queue may have changed while playback info was being resolved.
+                if (current?.PlaylistItemId === currentItem.PlaylistItemId
+                    && next?.PlaylistItemId === nextItem.PlaylistItemId) {
+                    console.debug('[gapless] resolved next audio stream');
+                    player.preload(streamInfo, () => {
+                        const queuedNext = self._playQueueManager.getNextItemInfo()?.item;
+                        return queuedNext?.PlaylistItemId === nextItem.PlaylistItemId;
+                    });
+                }
+            }).catch((err) => {
+                console.debug('Unable to preload next audio track', err);
+                player.clearPreload?.();
+            });
+        }
+
         function onPlaybackStarted(player, playOptions, streamInfo, mediaSource) {
             if (!player) {
                 throw new Error('player cannot be null');
@@ -3306,6 +3376,7 @@ export class PlaybackManager {
             streamInfo.started = true;
 
             startPlaybackProgressTimer(player);
+            preloadNextAudioTrack(player, streamInfo.item);
         }
 
         function onPlaybackStartedFromSelfManagingPlayer(e, item, mediaSource) {
@@ -3500,22 +3571,33 @@ export class PlaybackManager {
             if (errorOccurred) {
                 showPlaybackInfoErrorMessage(self, 'PlaybackError' + displayErrorCode);
             } else if (newPlayer) {
-                const apiClient = ServerConnections.getApiClient(nextItem.item.ServerId);
+                const playNextItem = () => {
+                    self.nextTrack();
 
-                apiClient.getCurrentUser().then(function (user) {
-                    if (user.Configuration.EnableNextEpisodeAutoPlay || nextMediaType !== MediaType.Video) {
-                        self.nextTrack();
-
-                        if (newPlayer !== player) {
-                            Events.trigger(self, 'playbackstop', [{
-                                player,
-                                state,
-                                nextItem,
-                                nextMediaType
-                            }]);
-                        }
+                    if (newPlayer !== player) {
+                        Events.trigger(self, 'playbackstop', [{
+                            player,
+                            state,
+                            nextItem,
+                            nextMediaType
+                        }]);
                     }
-                });
+                };
+
+                // The autoplay preference only applies to video. Start resolving the next
+                // audio track immediately instead of putting a user request in the critical
+                // path between songs.
+                if (nextMediaType !== MediaType.Video) {
+                    playNextItem();
+                } else {
+                    const apiClient = ServerConnections.getApiClient(nextItem.item.ServerId);
+
+                    apiClient.getCurrentUser().then(function (user) {
+                        if (user.Configuration.EnableNextEpisodeAutoPlay) {
+                            playNextItem();
+                        }
+                    });
+                }
             }
         }
 

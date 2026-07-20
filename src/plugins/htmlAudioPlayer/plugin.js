@@ -9,6 +9,11 @@ import profileBuilder from '../../scripts/browserDeviceProfile';
 import { getIncludeCorsCredentials } from '../../scripts/settings/webSettings';
 import Events from '../../utils/events.ts';
 
+// Give the next decoder enough time to start, then use Web Audio gain ramps to
+// blend its first second with the final second of the outgoing track.
+const GAPLESS_CROSSFADE_MS = 1000;
+const GAPLESS_SCHEDULE_WINDOW_MS = 2000;
+
 function getDefaultProfile() {
     return profileBuilder({});
 }
@@ -97,16 +102,164 @@ class HtmlAudioPlayer {
 
         // Let any players created by plugins take priority
         self.priority = 1;
+        self._gainNodes = new WeakMap();
+        self._sourceNodes = new WeakMap();
+        self._normalizationGains = new WeakMap();
 
         self.play = function (options) {
             self._started = false;
             self._timeUpdated = false;
             self._currentTime = null;
 
+            if (isMatchingPreload(options)) {
+                return playPreloaded(options);
+            }
+
+            self.clearPreload();
             const elem = createMediaElement();
 
             return setCurrentSrc(elem, options);
         };
+
+        function isMatchingPreload(options) {
+            const preloadedItem = self._preloadedOptions?.item;
+            return self._preloadedElement
+                && (preloadedItem?.PlaylistItemId || preloadedItem?.Id)
+                    === (options.item?.PlaylistItemId || options.item?.Id);
+        }
+
+        self.getPreloadedOptions = function (item) {
+            return isMatchingPreload({ item }) ? self._preloadedOptions : null;
+        };
+
+        function playPreloaded(options) {
+            const previousElement = self._mediaElement;
+            const elem = self._preloadedElement;
+            const alreadyPlaying = self._preloadedStarted;
+
+            self._preloadedElement = null;
+            self._preloadedOptions = null;
+            self._preloadedStarted = false;
+            self._isPreloadStillNext = null;
+
+            if (previousElement && previousElement !== elem) {
+                unBindEvents(previousElement);
+                disconnectAudioNodes(previousElement);
+                htmlMediaHelper.resetSrc(previousElement);
+                previousElement.remove();
+            }
+
+            self._mediaElement = elem;
+            elem.classList.remove('mediaPlayerAudioPreload');
+            elem.classList.add('mediaPlayerAudio');
+            elem.autoplay = true;
+            bindEvents(elem);
+
+            self._currentPlayOptions = options;
+            self._currentSrc = options.url;
+            applyNormalization(elem, options);
+            console.debug('[gapless] promoting preloaded audio track');
+
+            return resumeAudioContext().then(() => htmlMediaHelper.playWithPromise(elem, onError)).then(() => {
+                // The standby element may have been started by the previous element's
+                // ended handler before PlaybackManager finished advancing its state.
+                if (alreadyPlaying && !elem.paused && !self._started) {
+                    onPlaying.call(elem, { target: elem });
+                }
+            });
+        }
+
+        self.preload = async function (options, isStillNext) {
+            // Progressive audio transcodes can be buffered just like direct-play
+            // files. HLS has a separate segmented lifecycle and remains on the
+            // established single-element path.
+            if (options.mediaSource?.TranscodingSubProtocol === 'hls'
+                || options.url?.includes('.m3u8')) {
+                console.debug('[gapless] preload unavailable for HLS audio');
+                self.clearPreload();
+                return;
+            }
+
+            self.clearPreload();
+
+            const elem = document.createElement('audio');
+            elem.classList.add('mediaPlayerAudioPreload', 'hide');
+            elem.preload = 'auto';
+            elem.volume = self._mediaElement?.volume ?? htmlMediaHelper.getSavedVolume();
+            elem.muted = self._mediaElement?.muted ?? false;
+
+            const crossOrigin = htmlMediaHelper.getCrossOriginValue(options.mediaSource);
+            if (crossOrigin) {
+                elem.crossOrigin = crossOrigin;
+            }
+
+            self._preloadedElement = elem;
+            self._preloadedOptions = options;
+            self._isPreloadStillNext = isStillNext;
+            document.body.appendChild(elem);
+
+            if (await getIncludeCorsCredentials()) {
+                elem.crossOrigin = 'use-credentials';
+            }
+
+            if (self._preloadedElement !== elem) return;
+
+            await htmlMediaHelper.applySrc(elem, options.url, options);
+            await applyNormalization(elem, options, false);
+            elem.load();
+            console.debug('[gapless] next audio track is preloading');
+            scheduleGaplessTransition(self._mediaElement);
+        };
+
+        self.clearPreload = function () {
+            clearGaplessTransition();
+            const elem = self._preloadedElement;
+            self._preloadedElement = null;
+            self._preloadedOptions = null;
+            self._preloadedStarted = false;
+            self._isPreloadStillNext = null;
+
+            if (elem) {
+                disconnectAudioNodes(elem);
+                htmlMediaHelper.resetSrc(elem);
+                elem.remove();
+            }
+        };
+
+        function applyNormalization(elem, options, activate = true) {
+            return import('../../scripts/settings/userSettings').then((userSettings) => {
+                let normalizationGain = 0;
+                if (userSettings.selectAudioNormalization() == 'TrackGain') {
+                    normalizationGain = options.item.NormalizationGain
+                        ?? options.mediaSource.albumNormalizationGain;
+                } else if (userSettings.selectAudioNormalization() == 'AlbumGain') {
+                    normalizationGain = options.mediaSource.albumNormalizationGain
+                        ?? options.item.NormalizationGain;
+                } else {
+                    console.debug('normalization disabled');
+                }
+
+                let gainNode = self._gainNodes.get(elem);
+                if (!gainNode) {
+                    gainNode = addGainElement(elem);
+                    if (!gainNode) return;
+                }
+                if (activate) {
+                    self.gainNode = gainNode;
+                }
+
+                let gain = normalizationGain ? Math.pow(10, normalizationGain / 20) : 1;
+                if (browser.safari) {
+                    gain *= elem.volume;
+                }
+                self._normalizationGains.set(elem, gain);
+                gainNode.gain.value = activate ? gain : 0;
+                if (activate) self.normalizationGain = gain;
+                console.debug('gain: ' + gainNode.gain.value);
+            }).catch((err) => {
+                console.error('Failed to add/change gainNode', err);
+            });
+        }
 
         function setCurrentSrc(elem, options) {
             unBindEvents(elem);
@@ -114,40 +267,7 @@ class HtmlAudioPlayer {
 
             let val = options.url;
             console.debug('playing url: ' + val);
-            import('../../scripts/settings/userSettings').then((userSettings) => {
-                let normalizationGain;
-                if (userSettings.selectAudioNormalization() == 'TrackGain') {
-                    normalizationGain = options.item.NormalizationGain
-                        ?? options.mediaSource.albumNormalizationGain;
-                } else if (userSettings.selectAudioNormalization() == 'AlbumGain') {
-                    normalizationGain =
-                        options.mediaSource.albumNormalizationGain
-                        ?? options.item.NormalizationGain;
-                } else {
-                    console.debug('normalization disabled');
-                    return;
-                }
-
-                if (!self.gainNode) {
-                    addGainElement(elem);
-                    if (!self.gainNode) return;
-                }
-
-                if (normalizationGain) {
-                    self.normalizationGain = Math.pow(10, normalizationGain / 20);
-                    self.gainNode.gain.value = self.normalizationGain;
-                } else {
-                    self.gainNode.gain.value = 1;
-                    self.normalizationGain = 1;
-                }
-                if (browser.safari) {
-                    // Gain value is absolute in Safari. Add volume from the slider
-                    self.gainNode.gain.value *= elem.volume;
-                }
-                console.debug('gain: ' + self.normalizationGain);
-            }).catch((err) => {
-                console.error('Failed to add/change gainNode', err);
-            });
+            applyNormalization(elem, options);
 
             // Convert to seconds
             const seconds = (options.playerStartPositionTicks || 0) / 10000000;
@@ -225,6 +345,7 @@ class HtmlAudioPlayer {
 
         self.stop = function (destroyPlayer) {
             cancelFadeTimeout();
+            clearGaplessTransition();
 
             const elem = self._mediaElement;
             const src = self._currentSrc;
@@ -258,7 +379,9 @@ class HtmlAudioPlayer {
         };
 
         self.destroy = function () {
+            self.clearPreload();
             unBindEvents(self._mediaElement);
+            disconnectAudioNodes(self._mediaElement);
             htmlMediaHelper.resetSrc(self._mediaElement);
         };
 
@@ -293,7 +416,8 @@ class HtmlAudioPlayer {
             try {
                 const AudioContext = window.AudioContext || window.webkitAudioContext; /* eslint-disable-line compat/compat */
 
-                const audioCtx = new AudioContext();
+                const audioCtx = self._audioContext || new AudioContext();
+                self._audioContext = audioCtx;
                 const source = audioCtx.createMediaElementSource(elem);
 
                 const gainNode = audioCtx.createGain();
@@ -301,13 +425,132 @@ class HtmlAudioPlayer {
                 source.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
 
-                self.gainNode = gainNode;
+                self._sourceNodes.set(elem, source);
+                self._gainNodes.set(elem, gainNode);
+                return gainNode;
             } catch (e) {
                 console.error('Web Audio API is not supported in this browser', e);
             }
         }
 
+        function disconnectAudioNodes(elem) {
+            self._sourceNodes.get(elem)?.disconnect();
+            self._gainNodes.get(elem)?.disconnect();
+            self._sourceNodes.delete(elem);
+            self._gainNodes.delete(elem);
+            self._normalizationGains.delete(elem);
+        }
+
+        function resumeAudioContext() {
+            const audioContext = self._audioContext;
+            if (audioContext?.state === 'suspended') {
+                return audioContext.resume().catch((err) => {
+                    console.debug('[gapless] unable to resume audio context', err);
+                });
+            }
+            return Promise.resolve();
+        }
+
+        function crossfadeToPreloadedElement(preloadedElement) {
+            const audioContext = self._audioContext;
+            const currentGain = self._gainNodes.get(self._mediaElement);
+            const nextGain = self._gainNodes.get(preloadedElement);
+            if (!audioContext || !currentGain || !nextGain) return;
+
+            const startTime = audioContext.currentTime;
+            const endTime = startTime + GAPLESS_CROSSFADE_MS / 1000;
+            const nextTarget = self._normalizationGains.get(preloadedElement) ?? 1;
+
+            currentGain.gain.cancelScheduledValues(startTime);
+            currentGain.gain.setValueAtTime(currentGain.gain.value, startTime);
+            currentGain.gain.linearRampToValueAtTime(0, endTime);
+
+            nextGain.gain.cancelScheduledValues(startTime);
+            nextGain.gain.setValueAtTime(0, startTime);
+            nextGain.gain.linearRampToValueAtTime(nextTarget, endTime);
+        }
+
+        function resetCrossfade() {
+            const audioContext = self._audioContext;
+            if (!audioContext) return;
+
+            const currentGain = self._gainNodes.get(self._mediaElement);
+            const nextGain = self._gainNodes.get(self._preloadedElement);
+            const currentTarget = self._normalizationGains.get(self._mediaElement) ?? 1;
+
+            if (currentGain) {
+                currentGain.gain.cancelScheduledValues(audioContext.currentTime);
+                currentGain.gain.value = currentTarget;
+            }
+            if (nextGain) {
+                nextGain.gain.cancelScheduledValues(audioContext.currentTime);
+                nextGain.gain.value = 0;
+            }
+        }
+
+        function clearGaplessTransition() {
+            if (self._gaplessTransitionTimeout) {
+                clearTimeout(self._gaplessTransitionTimeout);
+                self._gaplessTransitionTimeout = null;
+            }
+        }
+
+        function startPreloadedElement() {
+            const preloadedElement = self._preloadedElement;
+            if (self._preloadedStarted
+                || !self._isPreloadStillNext?.()
+                || !preloadedElement
+                || preloadedElement.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+                return;
+            }
+
+            self._preloadedStarted = true;
+            console.debug('[gapless] starting one-second audio crossfade');
+            resumeAudioContext().then(() => {
+                crossfadeToPreloadedElement(preloadedElement);
+                return preloadedElement.play();
+            }).catch((err) => {
+                self._preloadedStarted = false;
+                const currentGain = self._gainNodes.get(self._mediaElement);
+                const currentTarget = self._normalizationGains.get(self._mediaElement) ?? 1;
+                if (currentGain && self._audioContext) {
+                    currentGain.gain.cancelScheduledValues(self._audioContext.currentTime);
+                    currentGain.gain.value = currentTarget;
+                }
+                console.debug('Unable to start preloaded audio track', err);
+            });
+        }
+
+        function scheduleGaplessTransition(elem) {
+            clearGaplessTransition();
+
+            if (!elem || elem !== self._mediaElement || elem.paused
+                || self._preloadedStarted || !self._isPreloadStillNext?.()
+                || !self._preloadedElement
+                || self._preloadedElement.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+                || !htmlMediaHelper.isValidDuration(elem.duration)) {
+                return;
+            }
+
+            const remainingMs = Math.max(0, (elem.duration - elem.currentTime) * 1000 / elem.playbackRate);
+            const delayMs = remainingMs - GAPLESS_CROSSFADE_MS;
+            if (delayMs > GAPLESS_SCHEDULE_WINDOW_MS) return;
+
+            if (delayMs <= 0) {
+                startPreloadedElement();
+            } else {
+                self._gaplessTransitionTimeout = setTimeout(() => {
+                    self._gaplessTransitionTimeout = null;
+                    if (elem === self._mediaElement && !elem.paused) {
+                        startPreloadedElement();
+                    }
+                }, delayMs);
+            }
+        }
+
         function onEnded() {
+            clearGaplessTransition();
+            startPreloadedElement();
             htmlMediaHelper.onEndedInternal(self, this, onError);
         }
 
@@ -318,6 +561,7 @@ class HtmlAudioPlayer {
             // Don't trigger events after user stop
             if (!self._isFadingOut) {
                 self._currentTime = time;
+                scheduleGaplessTransition(this);
                 Events.trigger(self, 'timeupdate');
             }
         }
@@ -339,6 +583,7 @@ class HtmlAudioPlayer {
 
                 htmlMediaHelper.seekOnPlaybackStart(self, e.target, self._currentPlayOptions.playerStartPositionTicks);
             }
+            scheduleGaplessTransition(this);
             Events.trigger(self, 'playing');
         }
 
@@ -347,6 +592,13 @@ class HtmlAudioPlayer {
         }
 
         function onPause() {
+            clearGaplessTransition();
+            if (!this.ended && self._preloadedStarted && self._preloadedElement) {
+                self._preloadedElement.pause();
+                self._preloadedElement.currentTime = 0;
+                self._preloadedStarted = false;
+                resetCrossfade();
+            }
             Events.trigger(self, 'pause');
         }
 
